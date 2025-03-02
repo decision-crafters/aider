@@ -17,16 +17,42 @@ echo -e "${BLUE}===============================================${NC}"
 echo -e "${BLUE}Aider Task Manager Development Testing Script${NC}"
 echo -e "${BLUE}===============================================${NC}"
 
+# Find compatible Python version (prefer 3.11 if available)
+PYTHON_BIN="python3"
+if command -v python3.11 > /dev/null; then
+    PYTHON_BIN="python3.11"
+elif command -v python3.10 > /dev/null; then
+    PYTHON_BIN="python3.10"
+elif command -v python3.9 > /dev/null; then
+    PYTHON_BIN="python3.9"
+fi
+
+echo -e "${GREEN}Using Python: $($PYTHON_BIN --version)${NC}"
+
 # Check if virtual environment exists and activate it
 if [ -d "venv" ]; then
     echo -e "${GREEN}Activating virtual environment...${NC}"
     source venv/bin/activate
 else
-    echo -e "${YELLOW}Virtual environment not found. Creating one...${NC}"
-    python -m venv venv
+    echo -e "${YELLOW}Virtual environment not found. Creating one with $PYTHON_BIN...${NC}"
+    $PYTHON_BIN -m venv venv
     source venv/bin/activate
-    echo -e "${GREEN}Installing development dependencies...${NC}"
-    pip install -e ".[dev]"
+    
+    # Upgrade pip
+    echo -e "${GREEN}Upgrading pip...${NC}"
+    pip install --upgrade pip setuptools wheel
+    
+    # Install core dependencies
+    echo -e "${GREEN}Installing core dependencies...${NC}"
+    pip install -r requirements.txt
+    
+    # Install package in development mode
+    echo -e "${GREEN}Installing aider in development mode...${NC}"
+    pip install -e .
+    
+    # Install test dependencies
+    echo -e "${GREEN}Installing test dependencies...${NC}"
+    pip install pytest flake8
 fi
 
 # Parse command line arguments
@@ -452,7 +478,27 @@ EOF
     exit 1
 fi
 
+# Check for common dependencies needed by Aider
+missing_deps=false
+for dep in "packaging" "litellm" "openai" "configargparse" "diskcache" "pydantic"; do
+    if ! python -c "import $dep" &>/dev/null; then
+        echo -e "${YELLOW}Missing dependency: $dep. Installing...${NC}"
+        pip install $dep
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}Failed to install $dep${NC}"
+            missing_deps=true
+        fi
+    fi
+done
+
+# Abort if any critical dependencies couldn't be installed
+if $missing_deps; then
+    echo -e "${RED}Some dependencies could not be installed. Please fix the issues and try again.${NC}"
+    exit 1
+fi
+
 # Run Aider with task manager enabled
+echo -e "${GREEN}Launching Aider with task manager...${NC}"
 python -m aider.main --architect-auto-tasks --auto-test-tasks --auto-test-retry-limit 3 --work-dir "$WORK_DIR"
 
 echo -e "${GREEN}Testing session completed.${NC}"
