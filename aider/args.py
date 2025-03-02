@@ -235,6 +235,12 @@ def get_parser(default_config_files, git_root):
         help="Use architect edit format for the main chat",
     )
     group.add_argument(
+        "--architect-auto-tasks",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable automatic task generation in architect mode (default: False)",
+    )
+    group.add_argument(
         "--weak-model",
         metavar="WEAK_MODEL",
         default=None,
@@ -569,6 +575,18 @@ def get_parser(default_config_files, git_root):
         action=argparse.BooleanOptionalAction,
         default=False,
         help="Enable/disable automatic testing after changes (default: False)",
+    )
+    group.add_argument(
+        "--auto-test-tasks",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Automatically create and resolve tasks for failing tests (default: False)",
+    )
+    group.add_argument(
+        "--auto-test-retry-limit",
+        type=int,
+        default=5,
+        help="Maximum number of attempts to fix a failing test before escalating (default: 5)",
     )
     group.add_argument(
         "--test",

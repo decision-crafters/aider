@@ -980,8 +980,37 @@ def main(argv=None, input=None, output=None, force_git_root=None, return_coder=F
             io.tool_error("No --test-cmd provided.")
             analytics.event("exit", reason="No test command provided")
             return 1
+        
+        # Run tests
         coder.commands.cmd_test(args.test_cmd)
-        if io.placeholder:
+        
+        # If auto-test-tasks is enabled and tests failed, continuously run and fix tests
+        if args.auto_test_tasks and io.placeholder and not args.dry_run:
+            io.tool_output("Auto-test-tasks enabled. Will continuously fix failing tests until they pass.")
+            
+            retry_count = 0
+            max_auto_fix_attempts = args.auto_test_retry_limit * 2  # Allow for multiple task attempts
+            
+            while io.placeholder and retry_count < max_auto_fix_attempts:
+                retry_count += 1
+                io.tool_output(f"Auto-fix attempt {retry_count}/{max_auto_fix_attempts}...")
+                
+                # Run the model to fix the failing test
+                coder.run(io.placeholder)
+                
+                # Run tests again to see if they're fixed
+                coder.commands.cmd_test(args.test_cmd)
+                
+                # If no more failures (placeholder is empty), we're done
+                if not io.placeholder:
+                    io.tool_output("All tests passing! Auto-fix complete.")
+                    break
+            
+            if io.placeholder:
+                io.tool_output("Reached maximum auto-fix attempts. Some tests still failing.")
+        
+        # Process any remaining placeholder for normal --test mode
+        elif io.placeholder:
             coder.run(io.placeholder)
 
     if args.commit:

@@ -21,6 +21,7 @@ from aider.llm import litellm
 from aider.repo import ANY_GIT_ERROR
 from aider.run_cmd import run_cmd
 from aider.scrape import Scraper, install_playwright
+from aider.taskmanager import get_task_manager, Task
 from aider.utils import is_image_file
 
 from .dump import dump  # noqa: F401
@@ -902,17 +903,325 @@ class Commands:
         if not args:
             return
 
+        # Store the original command for task tracking
+        test_cmd = args if isinstance(args, str) else "custom test function"
+
         if not callable(args):
             if type(args) is not str:
                 raise ValueError(repr(args))
-            return self.cmd_run(args, True)
+            exit_status, errors = self._run_test_cmd(args)
+        else:
+            errors = args()
+            exit_status = 1 if errors else 0
 
-        errors = args()
         if not errors:
+            # Test passed, reset failures if in a task
+            self._handle_test_success(test_cmd)
             return
 
+        # Test failed, track in task if applicable
+        should_research = self._handle_test_failure(test_cmd, errors)
+
         self.io.tool_output(errors)
+        
+        # If we reached the threshold for automatic research, suggest it
+        if should_research:
+            self._offer_test_research(test_cmd, errors)
+
         return errors
+        
+    def _run_test_cmd(self, cmd):
+        """Run a test command and return exit status and output."""
+        exit_status, combined_output = run_cmd(
+            cmd, verbose=self.verbose, error_print=self.io.tool_error, cwd=self.coder.root
+        )
+        return exit_status, combined_output
+        
+    def _handle_test_success(self, test_cmd):
+        """Handle a successful test run, resetting failures if in a task."""
+        task_manager = get_task_manager()
+        active_task = task_manager.get_active_task()
+        
+        if active_task and active_task.test_info:
+            # Reset failure counts for this test
+            task_manager.reset_test_failures(active_task.id)
+            self.io.tool_output("Test passed! Reset failure tracking.")
+            
+            # Add successful solution to task history
+            if active_task.test_info.failing_tests:
+                for test_name in active_task.test_info.failing_tests:
+                    task_manager.add_attempted_solution(
+                        active_task.id, 
+                        test_name, 
+                        "Recent code changes fixed this test", 
+                        True
+                    )
+        
+    def _handle_test_failure(self, test_cmd, errors):
+        """Handle a test failure, tracking it in the active task if there is one."""
+        task_manager = get_task_manager()
+        active_task = task_manager.get_active_task()
+        
+        if not active_task:
+            return False
+            
+        # Extract test names from errors - this is a simplified example
+        # In practice, you would parse the errors more carefully based on test framework
+        import re
+        test_names = []
+        
+        # Look for common test failure patterns
+        # This is just an example - you would need to adapt to your test output format
+        patterns = [
+            r'(?:FAIL|ERROR)(?:ED)?\s*(?::|::\s*|\s+)([^\n:]+)',  # pytest, jest, etc.
+            r'(?:not ok|fail)\s+\d+\s+-\s+([^\n]+)',              # tap format
+            r'(?:Assertion failed|Test failed)(?::|::\s*|\s+)([^\n:]+)',  # generic
+        ]
+        
+        for pattern in patterns:
+            matches = re.finditer(pattern, errors, re.IGNORECASE)
+            for match in matches:
+                test_name = match.group(1).strip()
+                if test_name:
+                    test_names.append(test_name)
+        
+        # If no specific tests identified, use the command as the test name
+        if not test_names:
+            test_names = [test_cmd]
+            
+        # Track each failing test
+        exceeded_threshold = False
+        for test_name in test_names:
+            if task_manager.add_test_failure(active_task.id, test_name):
+                exceeded_threshold = True
+                
+        return exceeded_threshold
+        
+    def _offer_test_research(self, test_cmd, errors):
+        """Offer to research the test failure and suggest solutions."""
+        task_manager = get_task_manager()
+        active_task = task_manager.get_active_task()
+        
+        # Check if auto-test-tasks is enabled
+        if hasattr(self, 'args') and getattr(self.args, 'auto_test_tasks', False):
+            self._auto_resolve_test_failure(test_cmd, errors)
+            return
+        
+        if not active_task or not active_task.test_info:
+            return
+            
+        self.io.tool_output("\nThis test has failed multiple times. Would you like me to:")
+        options = [
+            "Research similar tests in the codebase",
+            "Analyze the test requirements more carefully",
+            "Suggest a different implementation approach",
+            "Review previous failed attempts"
+        ]
+        
+        for i, option in enumerate(options, 1):
+            self.io.tool_output(f"{i}. {option}")
+            
+        choice = self.io.confirm_ask("Would you like me to help with this test failure?")
+        if choice:
+            # Here you would typically use the help functionality or a special research mode
+            # For now, we'll just add the suggestion to try again with a more careful analysis
+            research_message = f"""
+I notice that this test has failed multiple times. Let me analyze it more carefully.
+
+The test command was: {test_cmd}
+
+The error output is:
+{errors[:500]}...
+
+Let me review the test requirements carefully and suggest a new approach.
+"""
+            self.coder.cur_messages += [
+                dict(role="user", content=research_message),
+            ]
+            
+    def _auto_resolve_test_failure(self, test_cmd, errors):
+        """
+        Automatically resolve test failures by creating tasks and having the LLM fix them.
+        This is used when --auto-test-tasks is enabled.
+        """
+        task_manager = get_task_manager()
+        
+        # Extract test names from errors
+        import re
+        test_names = []
+        
+        # Look for common test failure patterns
+        patterns = [
+            r'(?:FAIL|ERROR)(?:ED)?\s*(?::|::\s*|\s+)([^\n:]+)',  # pytest, jest, etc.
+            r'(?:not ok|fail)\s+\d+\s+-\s+([^\n]+)',              # tap format
+            r'(?:Assertion failed|Test failed)(?::|::\s*|\s+)([^\n:]+)',  # generic
+            r'(?:Test Failed|Failure|Failed)\s*:?\s*([^\n]+)',    # other formats
+        ]
+        
+        for pattern in patterns:
+            matches = re.finditer(pattern, errors, re.IGNORECASE)
+            for match in matches:
+                test_name = match.group(1).strip()
+                if test_name:
+                    test_names.append(test_name)
+        
+        # If no specific tests identified, use the command as the test name
+        if not test_names:
+            test_names = ["Unknown test failure"]
+            
+        # Process each failing test
+        for test_name in test_names:
+            self._process_failing_test(test_name, test_cmd, errors)
+    
+    def _process_failing_test(self, test_name, test_cmd, errors):
+        """
+        Process a single failing test, creating a task if needed and attempting to fix it.
+        """
+        task_manager = get_task_manager()
+        
+        # Check if we already have a task for this test
+        task_name = f"Fix test: {test_name}"
+        task = task_manager.get_task_by_name(task_name)
+        
+        if not task:
+            # Create a new task for this failing test
+            task = task_manager.create_task(task_name, f"Automatically fix failing test: {test_name}")
+            self.io.tool_output(f"Created task for failing test: {test_name}")
+            
+            # Associate current files with the task
+            for fname in self.coder.abs_fnames:
+                rel_fname = self.coder.get_rel_fname(fname)
+                task.add_files([rel_fname])
+        
+        # Check how many attempts we've made and if we should continue
+        retry_limit = getattr(self.args, 'auto_test_retry_limit', 5)
+        
+        if task.test_info and test_name in task.test_info.failure_counts:
+            attempt_count = task.test_info.failure_counts[test_name]
+            
+            # If we've reached the limit, notify but don't continue
+            if attempt_count >= retry_limit:
+                self.io.tool_error(f"Reached retry limit ({retry_limit}) for test: {test_name}")
+                self.io.tool_output("Please manually address this test failure.")
+                return
+        
+        # Switch to this task if we're not already on it
+        active_task = task_manager.get_active_task()
+        if not active_task or active_task.id != task.id:
+            # Save current context
+            if active_task:
+                current_files = [self.coder.get_rel_fname(fname) for fname in self.coder.abs_fnames]
+                active_task.add_files(current_files)
+                
+                if self.coder.cur_messages:
+                    chat_context = str(self.coder.cur_messages)
+                    active_task.add_conversation_context(chat_context)
+                
+                task_manager.update_task(active_task)
+            
+            # Switch to the test task
+            task_manager.switch_task(task.id)
+            self.io.tool_output(f"Switched to task: {task_name}")
+        
+        # Update the test failure count
+        task_manager.add_test_failure(task.id, test_name)
+        
+        # Generate a message for fixing the test
+        fix_message = self._generate_test_fix_message(test_name, test_cmd, errors, task)
+        
+        # Add to the chat and let the model generate a fix
+        self.coder.cur_messages += [
+            dict(role="user", content=fix_message),
+        ]
+        
+    def _generate_test_fix_message(self, test_name, test_cmd, errors, task):
+        """
+        Generate a message asking the model to fix the failing test,
+        including context from previous attempts.
+        """
+        task_manager = get_task_manager()
+        attempt_count = 1
+        previous_attempts = ""
+        
+        if task.test_info and test_name in task.test_info.failure_counts:
+            attempt_count = task.test_info.failure_counts[test_name]
+            
+            # Add information about previous attempts
+            if task.test_info.attempted_solutions:
+                solutions = task_manager.get_attempted_solutions(task.id, test_name)
+                if solutions:
+                    previous_attempts = "\n\n## Previous Solution Attempts\n\n"
+                    for i, solution in enumerate(solutions, 1):
+                        previous_attempts += f"### Attempt {i}\n\n"
+                        previous_attempts += f"Solution tried: {solution['solution'][:200]}...\n\n"
+                        previous_attempts += f"Result: {'Successful' if solution['successful'] else 'Failed'}\n\n"
+        
+        # Create a message with appropriate context for the current attempt
+        if attempt_count == 1:
+            # First attempt - straightforward fix request
+            message = f"""
+I need to fix a failing test. Please help me resolve this test failure:
+
+## Test Information
+- Test name: {test_name}
+- Test command: {test_cmd}
+
+## Error Output
+```
+{errors[:1000]}
+```
+
+Please analyze the error and implement a fix for this failing test.
+"""
+        elif attempt_count <= 3:
+            # Early attempts - look more carefully
+            message = f"""
+This test has failed {attempt_count} times. Let's look more deeply at the issue:
+
+## Test Information
+- Test name: {test_name}
+- Test command: {test_cmd}
+
+## Error Output
+```
+{errors[:1000]}
+```
+
+{previous_attempts}
+
+For this attempt, please:
+1. Analyze the test requirements more carefully
+2. Check for subtle issues that might be causing the failure
+3. Consider edge cases and input validation
+4. Implement a fix that addresses the root cause
+"""
+        else:
+            # Later attempts - thorough investigation
+            message = f"""
+This test has failed {attempt_count} times despite multiple fix attempts. Let's perform a thorough investigation:
+
+## Test Information
+- Test name: {test_name}
+- Test command: {test_cmd}
+
+## Error Output
+```
+{errors[:1000]}
+```
+
+{previous_attempts}
+
+For this attempt, please:
+1. Perform a comprehensive analysis of the test failure
+2. Search for similar patterns in other tests that work correctly
+3. Check if there are fundamental assumptions or environment issues
+4. Consider if the test itself might need to be modified
+5. Implement a solution that addresses the deeper issues
+
+This is attempt {attempt_count} of {getattr(self.args, 'auto_test_retry_limit', 5)} before escalation.
+"""
+        
+        return message
 
     def cmd_run(self, args, add_on_nonzero_exit=False):
         "Run a shell command and optionally add the output to the chat (alias: !)"
@@ -1410,6 +1719,265 @@ class Commands:
         user_input = pipe_editor(initial_content, suffix="md", editor=self.editor)
         if user_input.strip():
             self.io.set_placeholder(user_input.rstrip())
+
+    def cmd_task(self, args):
+        """Manage tasks - create, switch, list, complete, archive"""
+        args = args.strip()
+        if not args:
+            self._task_help()
+            return
+
+        parts = args.split(maxsplit=1)
+        subcmd = parts[0].lower()
+        rest = parts[1] if len(parts) > 1 else ""
+
+        task_manager = get_task_manager()
+
+        if subcmd == "create":
+            return self._task_create(rest)
+        elif subcmd == "list":
+            return self._task_list(rest)
+        elif subcmd == "switch":
+            return self._task_switch(rest)
+        elif subcmd == "complete":
+            return self._task_complete(rest)
+        elif subcmd == "archive":
+            return self._task_archive(rest)
+        elif subcmd == "reactivate":
+            return self._task_reactivate(rest)
+        elif subcmd == "info":
+            return self._task_info(rest)
+        else:
+            self.io.tool_error(f"Unknown task subcommand: {subcmd}")
+            self._task_help()
+
+    def _task_help(self):
+        """Show task command help"""
+        self.io.tool_output("Task management commands:")
+        self.io.tool_output("  /task create <name> [description]  - Create a new task")
+        self.io.tool_output("  /task list [active|completed|archived]  - List tasks")
+        self.io.tool_output("  /task switch <task_name>  - Switch to a different task")
+        self.io.tool_output("  /task complete <task_name>  - Mark a task as completed")
+        self.io.tool_output("  /task archive <task_name>  - Archive a task")
+        self.io.tool_output("  /task reactivate <task_name>  - Reactivate a completed or archived task")
+        self.io.tool_output("  /task info <task_name>  - Show detailed information about a task")
+
+    def _task_create(self, args):
+        """Create a new task"""
+        parts = args.split(maxsplit=1)
+        if not parts:
+            self.io.tool_error("Task name is required")
+            return
+            
+        name = parts[0]
+        description = parts[1] if len(parts) > 1 else name
+        
+        task_manager = get_task_manager()
+        
+        # Check for duplicate task name
+        if task_manager.get_task_by_name(name):
+            self.io.tool_error(f"A task with the name '{name}' already exists")
+            return
+        
+        # Create the task
+        task = task_manager.create_task(name, description)
+        
+        # Associate current files with the task
+        for fname in self.coder.abs_fnames:
+            rel_fname = self.coder.get_rel_fname(fname)
+            task.add_files([rel_fname])
+        
+        # Save any conversation context
+        if self.coder.cur_messages:
+            # This would be expanded to properly serialize conversation context
+            chat_context = str(self.coder.cur_messages)
+            task.add_conversation_context(chat_context)
+        
+        # Switch to the new task
+        task_manager.switch_task(task.id)
+        
+        self.io.tool_output(f"Created and switched to task: {name}")
+        return task
+
+    def _task_list(self, args):
+        """List tasks"""
+        status = args.strip() if args.strip() in ["active", "completed", "archived"] else None
+        
+        task_manager = get_task_manager()
+        tasks = task_manager.list_tasks(status=status)
+        
+        if not tasks:
+            status_str = f" {status}" if status else ""
+            self.io.tool_output(f"No{status_str} tasks found.")
+            return
+        
+        active_task = task_manager.get_active_task()
+        active_id = active_task.id if active_task else None
+        
+        self.io.tool_output("Tasks:")
+        for task in tasks:
+            status_indicator = " "
+            if task.id == active_id:
+                status_indicator = "*"
+            elif task.status == "completed":
+                status_indicator = "✓"
+            elif task.status == "archived":
+                status_indicator = "a"
+                
+            self.io.tool_output(f"  [{status_indicator}] {task.name} - {task.description[:50]}")
+
+    def _task_switch(self, args):
+        """Switch to a different task"""
+        task_name = args.strip()
+        if not task_name:
+            self.io.tool_error("Task name is required")
+            return
+            
+        task_manager = get_task_manager()
+        task = task_manager.get_task_by_name(task_name)
+        
+        if not task:
+            self.io.tool_error(f"No task found with name: {task_name}")
+            return
+            
+        # Save current context to the active task if there is one
+        active_task = task_manager.get_active_task()
+        if active_task:
+            # Save files list
+            current_files = [self.coder.get_rel_fname(fname) for fname in self.coder.abs_fnames]
+            active_task.add_files(current_files)
+            
+            # Save conversation context
+            if self.coder.cur_messages:
+                chat_context = str(self.coder.cur_messages)
+                active_task.add_conversation_context(chat_context)
+            
+            task_manager.update_task(active_task)
+        
+        # Switch to the new task
+        task_manager.switch_task(task.id)
+        
+        # Clear current context
+        self._drop_all_files()
+        self._clear_chat_history()
+        
+        # Load the task's context
+        for file in task.files:
+            try:
+                abs_path = self.coder.abs_root_path(file)
+                if os.path.exists(abs_path):
+                    self.coder.abs_fnames.add(abs_path)
+            except Exception as e:
+                self.io.tool_error(f"Error loading file {file}: {e}")
+        
+        # Reload conversation context (this would need more sophisticated implementation)
+        if task.conversation_context:
+            # This would be expanded to properly restore conversation context
+            self.io.tool_output("Restored previous conversation context")
+        
+        self.io.tool_output(f"Switched to task: {task.name}")
+
+    def _task_complete(self, args):
+        """Mark a task as completed"""
+        task_name = args.strip()
+        if not task_name:
+            self.io.tool_error("Task name is required")
+            return
+            
+        task_manager = get_task_manager()
+        task = task_manager.get_task_by_name(task_name)
+        
+        if not task:
+            self.io.tool_error(f"No task found with name: {task_name}")
+            return
+            
+        task_manager.complete_task(task.id)
+        self.io.tool_output(f"Marked task as completed: {task.name}")
+
+    def _task_archive(self, args):
+        """Archive a task"""
+        task_name = args.strip()
+        if not task_name:
+            self.io.tool_error("Task name is required")
+            return
+            
+        task_manager = get_task_manager()
+        task = task_manager.get_task_by_name(task_name)
+        
+        if not task:
+            self.io.tool_error(f"No task found with name: {task_name}")
+            return
+            
+        task_manager.archive_task(task.id)
+        self.io.tool_output(f"Archived task: {task.name}")
+
+    def _task_reactivate(self, args):
+        """Reactivate a completed or archived task"""
+        task_name = args.strip()
+        if not task_name:
+            self.io.tool_error("Task name is required")
+            return
+            
+        task_manager = get_task_manager()
+        task = task_manager.get_task_by_name(task_name)
+        
+        if not task:
+            self.io.tool_error(f"No task found with name: {task_name}")
+            return
+            
+        task_manager.reactivate_task(task.id)
+        self.io.tool_output(f"Reactivated task: {task.name}")
+        
+    def _task_info(self, args):
+        """Show detailed information about a task"""
+        task_name = args.strip()
+        if not task_name:
+            self.io.tool_error("Task name is required")
+            return
+            
+        task_manager = get_task_manager()
+        task = task_manager.get_task_by_name(task_name)
+        
+        if not task:
+            self.io.tool_error(f"No task found with name: {task_name}")
+            return
+            
+        self.io.tool_output(f"Task: {task.name}")
+        self.io.tool_output(f"Description: {task.description}")
+        self.io.tool_output(f"Status: {task.status}")
+        self.io.tool_output(f"Created: {task.created_at}")
+        self.io.tool_output(f"Updated: {task.updated_at}")
+        
+        if task.files:
+            self.io.tool_output("\nFiles:")
+            for file in task.files:
+                self.io.tool_output(f"  - {file}")
+                
+        if task.parent_task_id:
+            parent_task = task_manager.get_task(task.parent_task_id)
+            if parent_task:
+                self.io.tool_output(f"\nParent task: {parent_task.name}")
+                
+        subtasks = task_manager.get_subtasks(task.id)
+        if subtasks:
+            self.io.tool_output("\nSubtasks:")
+            for subtask in subtasks:
+                status_indicator = " "
+                if subtask.status == "completed":
+                    status_indicator = "✓"
+                elif subtask.status == "archived":
+                    status_indicator = "a"
+                self.io.tool_output(f"  [{status_indicator}] {subtask.name}")
+                
+        if task.test_info and task.test_info.failing_tests:
+            self.io.tool_output("\nFailing tests:")
+            for test in task.test_info.failing_tests:
+                count = task.test_info.failure_counts.get(test, 0)
+                self.io.tool_output(f"  - {test} (failed {count} times)")
+                
+        self.io.tool_output(f"\nEnvironment: {task.environment.os}, Python {task.environment.python_version.split()[0]}")
+        if task.environment.git_branch:
+            self.io.tool_output(f"Git branch: {task.environment.git_branch}")
 
     def cmd_copy_context(self, args=None):
         """Copy the current chat context as markdown, suitable to paste into a web UI"""
