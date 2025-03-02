@@ -29,6 +29,15 @@ fi
 
 echo -e "${GREEN}Using Python: $($PYTHON_BIN --version)${NC}"
 
+# Check for venv deletion flag
+if [ "$1" == "--delete-venv" ]; then
+    if [ -d "venv" ]; then
+        echo -e "${YELLOW}Deleting existing virtual environment as requested...${NC}"
+        rm -rf venv
+        shift # Remove this argument from the parameters
+    fi
+fi
+
 # Check if virtual environment exists and activate it
 if [ -d "venv" ]; then
     echo -e "${GREEN}Activating virtual environment...${NC}"
@@ -63,6 +72,10 @@ TEST_DATA_DIR=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
+        --delete-venv)
+            # Already handled earlier, but need to include here for help message
+            shift
+            ;;
         --skip-tests)
             SKIP_TESTS=true
             shift
@@ -81,7 +94,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             echo -e "${RED}Unknown option: $1${NC}"
-            echo "Usage: ./dev_task_test.sh [--skip-tests] [--skip-lint] [--custom-env ENV_NAME] [--test-data DIR]"
+            echo "Usage: ./dev_task_test.sh [--delete-venv] [--skip-tests] [--skip-lint] [--custom-env ENV_NAME] [--test-data DIR]"
             exit 1
             ;;
     esac
@@ -499,6 +512,15 @@ fi
 
 # Run Aider with task manager enabled
 echo -e "${GREEN}Launching Aider with task manager...${NC}"
-python -m aider.main --architect-auto-tasks --auto-test-tasks --auto-test-retry-limit 3 --work-dir "$WORK_DIR"
+
+# Save current directory
+ORIGINAL_DIR=$(pwd)
+
+# Change to the working directory and run Aider
+cd "$WORK_DIR"
+python -m aider.main --architect-auto-tasks --auto-test-tasks --auto-test-retry-limit 3
+
+# Return to original directory when done
+cd "$ORIGINAL_DIR"
 
 echo -e "${GREEN}Testing session completed.${NC}"

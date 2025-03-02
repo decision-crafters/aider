@@ -1,4 +1,3 @@
-
 <!-- Edit README.md, not index.md -->
 
 # Aider is AI pair programming in your terminal
@@ -66,7 +65,39 @@ aider --model openrouter/anthropic/claude-3.5-sonnet --api-key openrouter=your-k
 # Work with DeepSeek via OpenRouter's API
 aider --model openrouter/deepseek/deepseek-chat --api-key openrouter=your-key-goes-here
 ```
-<!--[[[end]]]-->
+
+### Installing from source
+
+To install the latest development version with task management support:
+
+```bash
+# Clone the repository
+git clone https://github.com/tosinakinosho/aider.git
+cd aider
+
+# Create and activate a virtual environment (recommended)
+python -m venv venv
+source venv/bin/activate  # On Windows use: venv\Scripts\activate
+
+# Install in development mode with all dependencies
+pip install -e .
+
+```
+
+The test suite uses Pytest to ensure all components are working correctly. The tests cover:
+- Task creation and management
+- Task status changes
+- Task switching
+- Test tracking
+- File management
+- Environment capture
+- Integration with commands
+
+If you encounter any issues during installation or testing:
+1. Check the [Troubleshooting](https://aider.chat/docs/troubleshooting.html) guide
+2. Verify your Python version (3.8-3.13 supported)
+3. Ensure all dependencies are correctly installed
+4. Open an issue on GitHub with your error logs
 
 See the
 [installation instructions](https://aider.chat/docs/install.html)

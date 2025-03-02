@@ -105,6 +105,11 @@ class Coder:
     ignore_mentions = None
     chat_language = None
     file_watcher = None
+    task_manager = None
+    active_task = None
+    architect_auto_tasks = False
+    auto_test_tasks = False
+    auto_test_retry_limit = 5
 
     @classmethod
     def create(
@@ -249,6 +254,24 @@ class Coder:
         else:
             lines.append("Repo-map: disabled")
 
+        # Task information
+        if self.active_task:
+            lines.append(f"Active task: {self.active_task.name} (ID: {self.active_task.id})")
+            if self.active_task.status != "active":
+                lines.append(f"Task status: {self.active_task.status}")
+            
+            # Show task features that are enabled
+            task_features = []
+            if self.architect_auto_tasks:
+                task_features.append("architect-auto-tasks")
+            if self.auto_test_tasks:
+                task_features.append(f"auto-test-tasks (retry limit: {self.auto_test_retry_limit})")
+            
+            if task_features:
+                lines.append(f"Task features: {', '.join(task_features)}")
+        elif self.task_manager:
+            lines.append("No active task. Use /task create or /task switch to work with tasks.")
+            
         # Files
         for fname in self.get_inchat_relative_files():
             lines.append(f"Added {fname} to the chat.")
@@ -304,6 +327,11 @@ class Coder:
         ignore_mentions=None,
         file_watcher=None,
         auto_copy_context=False,
+        task_manager=None,
+        active_task=None,
+        architect_auto_tasks=False,
+        auto_test_tasks=False,
+        auto_test_retry_limit=5,
     ):
         # Fill in a dummy Analytics if needed, but it is never .enable()'d
         self.analytics = analytics if analytics is not None else Analytics()
@@ -483,6 +511,20 @@ class Coder:
         self.lint_cmds = lint_cmds
         self.auto_test = auto_test
         self.test_cmd = test_cmd
+        
+        # Task management
+        self.task_manager = task_manager
+        self.active_task = active_task
+        self.architect_auto_tasks = architect_auto_tasks 
+        self.auto_test_tasks = auto_test_tasks
+        self.auto_test_retry_limit = auto_test_retry_limit
+        
+        # Update active task with files if we have one
+        if self.active_task and self.abs_fnames:
+            file_list = [self.get_rel_fname(fname) for fname in self.abs_fnames]
+            self.active_task.add_files(file_list)
+            if self.task_manager:
+                self.task_manager.update_task(self.active_task)
 
         # validate the functions jsonschema
         if self.functions:
@@ -1089,6 +1131,36 @@ class Coder:
     def format_chat_chunks(self):
         self.choose_fence()
         main_sys = self.fmt_system_prompt(self.gpt_prompts.main_system)
+
+        # Add task context to system prompt if available
+        if self.active_task and hasattr(self, 'task_manager') and self.task_manager:
+            task_info = f"\n\n# Current Task Information\n"
+            task_info += f"Task ID: {self.active_task.id}\n"
+            task_info += f"Task Name: {self.active_task.name}\n"
+            task_info += f"Task Description: {self.active_task.description}\n"
+            task_info += f"Task Status: {self.active_task.status}\n"
+            
+            # Include files associated with the task
+            if self.active_task.files:
+                task_info += f"Files associated with this task:\n"
+                for file in self.active_task.files:
+                    task_info += f"- {file}\n"
+            
+            # Include conversation context from the task if available
+            if self.active_task.conversation_context:
+                context_preview = self.active_task.conversation_context
+                if len(context_preview) > 500:
+                    context_preview = context_preview[:500] + "..."
+                task_info += f"\nPrevious context from this task:\n{context_preview}\n"
+            
+            # Include test information if available
+            if self.active_task.test_info and self.active_task.test_info.failing_tests:
+                task_info += f"\nThis task involves fixing failing tests:\n"
+                for test in self.active_task.test_info.failing_tests:
+                    count = self.active_task.test_info.failure_counts.get(test, 0)
+                    task_info += f"- {test} (failure count: {count})\n"
+            
+            main_sys += task_info
 
         example_messages = []
         if self.main_model.examples_as_sys_msg:

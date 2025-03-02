@@ -13,6 +13,9 @@ Just show the changes needed.
 
 DO NOT show the entire updated function/file/etc!
 
+If the change request is part of a task, always consider the task context when providing your recommendations.
+When you identify distinct units of work, structure them clearly as task items.
+
 Always reply to the user in {language}.
 """
 

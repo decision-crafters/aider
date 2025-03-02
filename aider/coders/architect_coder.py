@@ -17,8 +17,15 @@ class ArchitectCoder(AskCoder):
             return
 
         # Check for auto-task generation if enabled
-        if hasattr(self, 'args') and getattr(self.args, 'architect_auto_tasks', False):
+        if self.architect_auto_tasks:
             self._handle_task_management(content)
+
+        # Record this discussion in the active task if one exists
+        if self.active_task and self.task_manager:
+            # Add conversation context to task
+            self.active_task.add_conversation_context(content[:500] + "..." if len(content) > 500 else content)
+            # Update task in storage
+            self.task_manager.update_task(self.active_task)
 
         if not self.io.confirm_ask("Edit the files?"):
             return
@@ -36,6 +43,13 @@ class ArchitectCoder(AskCoder):
         kwargs["cache_prompts"] = False
         kwargs["num_cache_warming_pings"] = 0
         kwargs["summarize_from_coder"] = False
+        
+        # Pass task information to the editor coder
+        kwargs["task_manager"] = self.task_manager
+        kwargs["active_task"] = self.active_task
+        kwargs["architect_auto_tasks"] = self.architect_auto_tasks
+        kwargs["auto_test_tasks"] = self.auto_test_tasks
+        kwargs["auto_test_retry_limit"] = self.auto_test_retry_limit
 
         new_kwargs = dict(io=self.io, from_coder=self)
         new_kwargs.update(kwargs)
@@ -52,6 +66,19 @@ class ArchitectCoder(AskCoder):
         self.move_back_cur_messages("I made those changes to the files.")
         self.total_cost = editor_coder.total_cost
         self.aider_commit_hashes = editor_coder.aider_commit_hashes
+        
+        # Update the active task with any new files that were created
+        if self.active_task and self.task_manager:
+            # Get current files in task
+            current_files = set(self.active_task.files)
+            # Get all files in editor
+            new_files = set([self.get_rel_fname(fname) for fname in editor_coder.abs_fnames])
+            # Add any new files
+            for file in new_files:
+                if file not in current_files:
+                    self.active_task.add_files([file])
+            # Update task
+            self.task_manager.update_task(self.active_task)
         
     def _handle_task_management(self, content):
         """

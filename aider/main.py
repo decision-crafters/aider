@@ -32,6 +32,7 @@ from aider.llm import litellm  # noqa: F401; properly init litellm on launch
 from aider.models import ModelSettings
 from aider.repo import ANY_GIT_ERROR, GitRepo
 from aider.report import report_uncaught_exceptions
+from aider.taskmanager import get_task_manager
 from aider.versioncheck import check_version, install_from_main_branch, install_upgrade
 from aider.watch import FileWatcher
 
@@ -894,6 +895,30 @@ def main(argv=None, input=None, output=None, force_git_root=None, return_coder=F
     else:
         map_tokens = args.map_tokens
 
+    # Initialize task manager
+    task_manager = get_task_manager()
+    active_task = task_manager.get_active_task()
+    
+    # Check if we have auto task generation for tests enabled
+    if args.auto_test_tasks and not active_task:
+        # Create a general task for the session if none exists
+        if args.test and args.test_cmd:
+            task = task_manager.create_task(
+                name="Auto-test session", 
+                description=f"Handle failing tests from command: {args.test_cmd}"
+            )
+            task_manager.switch_task(task.id)
+            active_task = task
+            io.tool_output(f"Created and switched to auto-test task: {task.name} (ID: {task.id})")
+        elif args.architect_auto_tasks:
+            task = task_manager.create_task(
+                name="Architecture analysis",
+                description="Analyze codebase architecture and suggest improvements"
+            )
+            task_manager.switch_task(task.id)
+            active_task = task
+            io.tool_output(f"Created and switched to architect task: {task.name} (ID: {task.id})")
+    
     try:
         coder = Coder.create(
             main_model=main_model,
@@ -926,6 +951,11 @@ def main(argv=None, input=None, output=None, force_git_root=None, return_coder=F
             chat_language=args.chat_language,
             detect_urls=args.detect_urls,
             auto_copy_context=args.copy_paste,
+            task_manager=task_manager,
+            active_task=active_task,
+            architect_auto_tasks=args.architect_auto_tasks,
+            auto_test_tasks=args.auto_test_tasks,
+            auto_test_retry_limit=args.auto_test_retry_limit,
         )
     except UnknownEditFormat as err:
         io.tool_error(str(err))
@@ -988,12 +1018,49 @@ def main(argv=None, input=None, output=None, force_git_root=None, return_coder=F
         if args.auto_test_tasks and io.placeholder and not args.dry_run:
             io.tool_output("Auto-test-tasks enabled. Will continuously fix failing tests until they pass.")
             
+            # Check if we have a task manager initialized and an active task
+            task_manager = get_task_manager()
+            active_task = coder.active_task
+            
+            # If no active task exists, create one for this test run
+            if not active_task:
+                task = task_manager.create_task(
+                    name=f"Fix failing tests",
+                    description=f"Automatically fix failures in test command: {args.test_cmd}"
+                )
+                task_manager.switch_task(task.id)
+                coder.active_task = task
+                active_task = task
+                io.tool_output(f"Created and switched to task: {task.name} (ID: {task.id})")
+                
+            # Parse the test failure to extract test names
+            test_failures = []
+            for line in io.placeholder.splitlines():
+                if "FAIL" in line or "ERROR" in line:
+                    # Simple extraction of test name - this can be improved for different test frameworks
+                    test_failures.append(line.strip())
+            
+            # Record the test failures in the active task
+            for test_failure in test_failures:
+                # Use a simplified name for the task manager
+                test_name = test_failure.split()[-1] if test_failure else "unknown_test"
+                # Record the failure and check if we're over threshold
+                threshold_reached = task_manager.add_test_failure(active_task.id, test_name)
+                
+                if threshold_reached:
+                    io.tool_output(f"Failure threshold reached for test: {test_name}")
+            
             retry_count = 0
-            max_auto_fix_attempts = args.auto_test_retry_limit * 2  # Allow for multiple task attempts
+            max_auto_fix_attempts = args.auto_test_retry_limit
             
             while io.placeholder and retry_count < max_auto_fix_attempts:
                 retry_count += 1
                 io.tool_output(f"Auto-fix attempt {retry_count}/{max_auto_fix_attempts}...")
+                
+                # Record the attempt in the task
+                if active_task:
+                    active_task.add_conversation_context(f"Attempt {retry_count} to fix: {io.placeholder[:100]}...")
+                    task_manager.update_task(active_task)
                 
                 # Run the model to fix the failing test
                 coder.run(io.placeholder)
@@ -1004,10 +1071,33 @@ def main(argv=None, input=None, output=None, force_git_root=None, return_coder=F
                 # If no more failures (placeholder is empty), we're done
                 if not io.placeholder:
                     io.tool_output("All tests passing! Auto-fix complete.")
+                    if active_task:
+                        # Reset the test failures for this task
+                        task_manager.reset_test_failures(active_task.id)
+                        # Add a record of the successful solution
+                        for test_failure in test_failures:
+                            test_name = test_failure.split()[-1] if test_failure else "unknown_test"
+                            task_manager.add_attempted_solution(
+                                active_task.id, 
+                                test_name, 
+                                "Fixed in attempt " + str(retry_count), 
+                                True
+                            )
                     break
+                
+                # Record a failed attempt
+                if active_task and retry_count == max_auto_fix_attempts:
+                    for test_failure in test_failures:
+                        test_name = test_failure.split()[-1] if test_failure else "unknown_test"
+                        task_manager.add_attempted_solution(
+                            active_task.id, 
+                            test_name, 
+                            f"Failed after {retry_count} attempts", 
+                            False
+                        )
             
             if io.placeholder:
-                io.tool_output("Reached maximum auto-fix attempts. Some tests still failing.")
+                io.tool_output(f"Reached maximum auto-fix attempts ({max_auto_fix_attempts}). Some tests still failing.")
         
         # Process any remaining placeholder for normal --test mode
         elif io.placeholder:

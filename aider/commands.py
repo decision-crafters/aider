@@ -1671,6 +1671,239 @@ This is attempt {attempt_count} of {getattr(self.args, 'auto_test_retry_limit', 
     def cmd_multiline_mode(self, args):
         "Toggle multiline mode (swaps behavior of Enter and Meta+Enter)"
         self.io.toggle_multiline_mode()
+        
+    def cmd_task(self, args):
+        "Create and manage tasks"
+        
+        # Get the task manager
+        task_manager = get_task_manager()
+        
+        # Parse arguments
+        parts = args.strip().split(maxsplit=1)
+        if not parts:
+            self.io.tool_error("Missing subcommand. Use /task help for available commands.")
+            return
+            
+        subcommand = parts[0]
+        args = parts[1] if len(parts) > 1 else ""
+        
+        if subcommand == "help" or subcommand == "":
+            self.io.tool_output("Task Manager Commands:")
+            self.io.tool_output("  /task create <name> <description> - Create a new task")
+            self.io.tool_output("  /task list [active|completed|archived] - List tasks")
+            self.io.tool_output("  /task switch <id> - Switch to a different task")
+            self.io.tool_output("  /task info <id> - Show task details")
+            self.io.tool_output("  /task complete <id> - Mark a task as completed")
+            self.io.tool_output("  /task archive <id> - Archive a task")
+            self.io.tool_output("  /task reactivate <id> - Reactivate a completed or archived task")
+            return
+            
+        elif subcommand == "create":
+            # Parse name and description
+            if not args:
+                self.io.tool_error("Missing task name and description. Usage: /task create <name> <description>")
+                return
+                
+            parts = args.split(maxsplit=1)
+            name = parts[0] if parts else ""
+            description = parts[1] if len(parts) > 1 else ""
+            
+            # Create the task
+            task = task_manager.create_task(name, description)
+            task_manager.switch_task(task.id)
+            
+            # Update coder with the new active task
+            if self.coder:
+                self.coder.active_task = task
+                
+                # Track files in the task
+                if self.coder.abs_fnames:
+                    file_list = [self.coder.get_rel_fname(fname) for fname in self.coder.abs_fnames]
+                    task.add_files(file_list)
+                    task_manager.update_task(task)
+            
+            self.io.tool_output(f"Created task: {task.id}")
+            self.io.tool_output(f"Title: {task.name}")
+            self.io.tool_output(f"Description: {task.description}")
+            self.io.tool_output(f"Status: {task.status}")
+            
+            return
+            
+        elif subcommand == "list":
+            # Filter by status if provided
+            status = args.strip() if args else None
+            
+            # List tasks
+            tasks = task_manager.list_tasks(status=status)
+            
+            if not tasks:
+                self.io.tool_output("No tasks found.")
+                return
+                
+            # Group by status
+            by_status = {}
+            for task in tasks:
+                if task.status not in by_status:
+                    by_status[task.status] = []
+                by_status[task.status].append(task)
+                
+            # Display active tasks first
+            if "active" in by_status:
+                self.io.tool_output("Active Tasks:")
+                for task in by_status["active"]:
+                    self.io.tool_output(f"- {task.id}: {task.name}")
+                self.io.tool_output("")
+                
+            # Display completed tasks
+            if "completed" in by_status:
+                self.io.tool_output("Completed Tasks:")
+                for task in by_status["completed"]:
+                    self.io.tool_output(f"- {task.id}: {task.name}")
+                self.io.tool_output("")
+                
+            # Display archived tasks
+            if "archived" in by_status:
+                self.io.tool_output("Archived Tasks:")
+                for task in by_status["archived"]:
+                    self.io.tool_output(f"- {task.id}: {task.name}")
+                
+            return
+            
+        elif subcommand == "switch":
+            task_id = args.strip()
+            if not task_id:
+                self.io.tool_error("Missing task ID. Usage: /task switch <id>")
+                return
+                
+            task = task_manager.get_task(task_id)
+            if not task:
+                self.io.tool_error(f"Task {task_id} not found.")
+                return
+                
+            # Switch to the task
+            task_manager.switch_task(task.id)
+            
+            # Update coder with the new active task
+            if self.coder:
+                self.coder.active_task = task
+                
+            self.io.tool_output(f"Switched to task: {task.id}")
+            self.io.tool_output(f"Title: {task.name}")
+            self.io.tool_output(f"Description: {task.description}")
+            self.io.tool_output(f"Status: {task.status}")
+            
+            return
+            
+        elif subcommand == "info":
+            task_id = args.strip()
+            if not task_id:
+                self.io.tool_error("Missing task ID. Usage: /task info <id>")
+                return
+                
+            task = task_manager.get_task(task_id)
+            if not task:
+                self.io.tool_error(f"Task {task_id} not found.")
+                return
+                
+            # Show task details
+            self.io.tool_output(f"Task Details: {task.id}")
+            self.io.tool_output(f"Title: {task.name}")
+            self.io.tool_output(f"Description: {task.description}")
+            self.io.tool_output(f"Status: {task.status}")
+            self.io.tool_output(f"Created: {task.created_at}")
+            if task.status == "completed":
+                self.io.tool_output(f"Completed: {task.updated_at}")
+            
+            # Show files
+            if task.files:
+                self.io.tool_output("Files:")
+                for file in task.files:
+                    self.io.tool_output(f"- {file}")
+            
+            # Show environment
+            self.io.tool_output("Environment:")
+            self.io.tool_output(f"- OS: {task.environment.os}")
+            self.io.tool_output(f"- Python: {task.environment.python_version}")
+            
+            # Show test information if available
+            if task.test_info and task.test_info.failing_tests:
+                self.io.tool_output("Test Information:")
+                self.io.tool_output(f"- Attempts: {task.test_info.attempt_count}")
+                self.io.tool_output("- Failing tests:")
+                for test in task.test_info.failing_tests:
+                    count = task.test_info.failure_counts.get(test, 0)
+                    self.io.tool_output(f"  * {test} (failures: {count})")
+            
+            return
+            
+        elif subcommand == "complete":
+            task_id = args.strip()
+            if not task_id:
+                self.io.tool_error("Missing task ID. Usage: /task complete <id>")
+                return
+                
+            task = task_manager.get_task(task_id)
+            if not task:
+                self.io.tool_error(f"Task {task_id} not found.")
+                return
+                
+            # Complete the task
+            task_manager.complete_task(task.id)
+            
+            # Update coder if this was the active task
+            if self.coder and self.coder.active_task and self.coder.active_task.id == task.id:
+                self.coder.active_task = task_manager.get_task(task.id)
+                
+            self.io.tool_output(f"Marked task {task.id} as completed.")
+            
+            return
+            
+        elif subcommand == "archive":
+            task_id = args.strip()
+            if not task_id:
+                self.io.tool_error("Missing task ID. Usage: /task archive <id>")
+                return
+                
+            task = task_manager.get_task(task_id)
+            if not task:
+                self.io.tool_error(f"Task {task_id} not found.")
+                return
+                
+            # Archive the task
+            task_manager.archive_task(task.id)
+            
+            # Update coder if this was the active task
+            if self.coder and self.coder.active_task and self.coder.active_task.id == task.id:
+                self.coder.active_task = task_manager.get_task(task.id)
+                
+            self.io.tool_output(f"Archived task {task.id}.")
+            
+            return
+            
+        elif subcommand == "reactivate":
+            task_id = args.strip()
+            if not task_id:
+                self.io.tool_error("Missing task ID. Usage: /task reactivate <id>")
+                return
+                
+            task = task_manager.get_task(task_id)
+            if not task:
+                self.io.tool_error(f"Task {task_id} not found.")
+                return
+                
+            # Reactivate the task
+            task_manager.reactivate_task(task.id)
+            
+            # Update coder if this was the active task
+            if self.coder and self.coder.active_task and self.coder.active_task.id == task.id:
+                self.coder.active_task = task_manager.get_task(task.id)
+                
+            self.io.tool_output(f"Reactivated task {task.id}.")
+            
+            return
+            
+        else:
+            self.io.tool_error(f"Unknown subcommand: {subcommand}. Use /task help for available commands.")
 
     def cmd_copy(self, args):
         "Copy the last assistant message to the clipboard"
