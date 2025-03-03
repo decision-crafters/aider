@@ -181,6 +181,8 @@ class TaskManager:
 
     def _save_task(self, task: Task):
         """Save a task to storage."""
+        # Ensure the storage directory exists
+        self.storage_dir.mkdir(parents=True, exist_ok=True)
         task_path = self.storage_dir / f"{task.id}.json"
         with open(task_path, 'w') as f:
             json.dump(task.to_dict(), f, indent=2)
