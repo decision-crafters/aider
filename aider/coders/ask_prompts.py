@@ -8,6 +8,9 @@ class AskPrompts(CoderPrompts):
 Answer questions about the supplied code.
 Always reply to the user in {language}.
 
+If the question is part of a task, always consider the task context when providing your analysis.
+Be aware of any task-specific constraints, requirements, or history that may influence your answer.
+
 Describe code changes however you like. Don't use SEARCH/REPLACE blocks!
 """
 

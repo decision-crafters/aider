@@ -1,0 +1,75 @@
+name: Task Manager Tests
+
+on:
+  push:
+    paths:
+      - 'aider/taskmanager.py'
+      - 'tests/basic/test_taskmanager.py'
+      - 'tests/basic/test_task_integration.py'
+      - 'aider/coders/ask_coder.py'
+      - 'aider/coders/ask_prompts.py'
+      - 'aider/coders/architect_coder.py'
+      - 'aider/coders/architect_prompts.py'
+      - '.github/workflows/task-manager-tests.yml'
+    branches:
+      - main
+  pull_request:
+    paths:
+      - 'aider/taskmanager.py'
+      - 'tests/basic/test_taskmanager.py'
+      - 'tests/basic/test_task_integration.py'
+      - 'aider/coders/ask_coder.py'
+      - 'aider/coders/ask_prompts.py'
+      - 'aider/coders/architect_coder.py'
+      - 'aider/coders/architect_prompts.py'
+      - '.github/workflows/task-manager-tests.yml'
+    branches:
+      - main
+
+jobs:
+  test-task-manager:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+
+    steps:
+    - name: Check out repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libportaudio2
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pytest pytest-cov
+        pip install .
+
+    - name: Run task-specific tests with coverage
+      env:
+        AIDER_ANALYTICS: false
+      run: |
+        pytest tests/basic/test_taskmanager.py tests/basic/test_task_integration.py -v --cov=aider.taskmanager --cov=aider.coders
+
+    - name: Run dev task test script
+      env:
+        AIDER_ANALYTICS: false
+      run: |
+        chmod +x scripts/dev_task_test.sh
+        ./scripts/dev_task_test.sh --skip-tests --custom-env debug
+      
+    - name: Verify task-related implementations
+      run: |
+        python -c "from aider.taskmanager import get_task_manager; tm = get_task_manager(); print('Task manager initialization successful')"
+        python -c "from aider.coders.ask_coder import AskCoder; from aider.io import InputOutput; coder = AskCoder(io=InputOutput(), show_timings=False); print('AskCoder initialization successful')"
+        python -c "from aider.coders.architect_coder import ArchitectCoder; from aider.io import InputOutput; coder = ArchitectCoder(io=InputOutput(), show_timings=False); print('ArchitectCoder initialization successful')"

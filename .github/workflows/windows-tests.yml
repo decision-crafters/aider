@@ -50,3 +50,8 @@ jobs:
       run: |
         pytest
         
+    - name: Run task-specific tests
+      env:
+        AIDER_ANALYTICS: false
+      run: |
+        pytest tests/basic/test_taskmanager.py tests/basic/test_task_integration.py -v
