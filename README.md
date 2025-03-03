@@ -72,11 +72,11 @@ To install the latest development version with task management support:
 
 ```bash
 # Clone the repository
-git clone https://github.com/tosinakinosho/aider.git
+git clone https://github.com/decision-crafters/aider.git
 cd aider
 
 # Create and activate a virtual environment (recommended)
-python -m venv venv
+python3.11 -m venv venv
 source venv/bin/activate  # On Windows use: venv\Scripts\activate
 
 # Install in development mode with all dependencies
