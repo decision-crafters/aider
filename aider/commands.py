@@ -4,6 +4,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import json
 from collections import OrderedDict
 from os.path import expanduser
 from pathlib import Path
@@ -1114,7 +1115,13 @@ Let me review the test requirements carefully and suggest a new approach.
                 active_task.add_files(current_files)
                 
                 if self.coder.cur_messages:
-                    chat_context = str(self.coder.cur_messages)
+                    # Properly serialize the conversation context instead of using str()
+                    # This will prevent Task objects from being incorrectly added to messages
+                    chat_context = json.dumps([
+                        {k: str(v) if not isinstance(v, (str, int, float, bool, type(None))) else v 
+                         for k, v in msg.items()} 
+                        for msg in self.coder.cur_messages
+                    ])
                     active_task.add_conversation_context(chat_context)
                 
                 task_manager.update_task(active_task)
@@ -2022,8 +2029,12 @@ This is attempt {attempt_count} of {getattr(self.args, 'auto_test_retry_limit', 
         
         # Save any conversation context
         if self.coder.cur_messages:
-            # This would be expanded to properly serialize conversation context
-            chat_context = str(self.coder.cur_messages)
+            # Properly serialize the conversation context
+            chat_context = json.dumps([
+                {k: str(v) if not isinstance(v, (str, int, float, bool, type(None))) else v 
+                 for k, v in msg.items()} 
+                for msg in self.coder.cur_messages
+            ])
             task.add_conversation_context(chat_context)
         
         # Switch to the new task
@@ -2082,7 +2093,12 @@ This is attempt {attempt_count} of {getattr(self.args, 'auto_test_retry_limit', 
             
             # Save conversation context
             if self.coder.cur_messages:
-                chat_context = str(self.coder.cur_messages)
+                # Properly serialize the conversation context
+                chat_context = json.dumps([
+                    {k: str(v) if not isinstance(v, (str, int, float, bool, type(None))) else v 
+                     for k, v in msg.items()} 
+                    for msg in self.coder.cur_messages
+                ])
                 active_task.add_conversation_context(chat_context)
             
             task_manager.update_task(active_task)
@@ -2103,10 +2119,19 @@ This is attempt {attempt_count} of {getattr(self.args, 'auto_test_retry_limit', 
             except Exception as e:
                 self.io.tool_error(f"Error loading file {file}: {e}")
         
-        # Reload conversation context (this would need more sophisticated implementation)
+        # Reload conversation context
         if task.conversation_context:
-            # This would be expanded to properly restore conversation context
-            self.io.tool_output("Restored previous conversation context")
+            try:
+                # Convert saved JSON string back to messages
+                serialized_messages = json.loads(task.conversation_context)
+                # Don't directly set cur_messages to avoid reference issues
+                # Instead, just output that context is available
+                self.io.tool_output("Conversation context from previous session is available")
+                # In a future implementation, we would restore the conversation:
+                # self.coder.cur_messages = serialized_messages
+            except json.JSONDecodeError:
+                # Handle legacy string format
+                self.io.tool_output("Conversation context from previous session is available (legacy format)")
         
         self.io.tool_output(f"Switched to task: {task.name}")
 

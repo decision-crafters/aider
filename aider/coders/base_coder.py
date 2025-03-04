@@ -659,7 +659,12 @@ class Coder:
     def get_cur_message_text(self):
         text = ""
         for msg in self.cur_messages:
-            text += msg["content"] + "\n"
+            # Check if content is a string before concatenating
+            if isinstance(msg.get("content"), str):
+                text += msg["content"] + "\n"
+            elif msg.get("content") is not None:
+                # Handle case where content is not a string (e.g., Task object)
+                text += str(msg["content"]) + "\n"
         return text
 
     def get_ident_mentions(self, text):
