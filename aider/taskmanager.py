@@ -44,14 +44,13 @@ class Environment:
 @dataclass
 class TestInfo:
     """Information specific to testing tasks."""
-
+    name: str
+    status: str
+    message: Optional[str] = None
     failing_tests: List[str] = field(default_factory=list)
     failure_counts: Dict[str, int] = field(default_factory=dict)
     threshold: int = 3  # Default threshold for failures before assistance
     attempted_solutions: List[Dict[str, Any]] = field(default_factory=list)
-    name: str
-    status: str
-    message: Optional[str] = None
 
 
 @dataclass
@@ -306,7 +305,12 @@ class TaskManager:
         if task_id in self.tasks:
             task = self.tasks[task_id]
             if task.test_info is None:
-                task.test_info = TestInfo(name=test_name, status="failed")
+                task.test_info = TestInfo(
+                    name=test_name,
+                    status="failed",
+                    failing_tests=[],
+                    failure_counts={}
+                )
 
             if test_name not in task.test_info.failing_tests:
                 task.test_info.failing_tests.append(test_name)
@@ -340,7 +344,12 @@ class TaskManager:
         if task_id in self.tasks:
             task = self.tasks[task_id]
             if task.test_info is None:
-                task.test_info = TestInfo(name=test_name, status="failed")
+                task.test_info = TestInfo(
+                    name=test_name,
+                    status="failed",
+                    failing_tests=[],
+                    failure_counts={}
+                )
 
             solution_entry = {
                 "test_name": test_name,
