@@ -232,1330 +232,16 @@ class Commands:
         return sorted(fun())
 
     def get_commands(self):
+        """Get a list of all available commands"""
         commands = []
         for attr in dir(self):
-            if not attr.startswith("cmd_"):
-                continue
-            if attr.startswith("cmd__"):
-                continue
-            cmd = attr[4:]
-            cmd = cmd.replace("_", "-")
-            commands.append("/" + cmd)
-            
-        # Add systemcard command 
-        commands.append("/systemcard")
-
+            if attr.startswith("cmd_"):
+                cmd_name = attr[4:].replace("_", "-")
+                commands.append(f"/{cmd_name}")
+        # Add autotest command to commands list
+        if "/autotest" not in commands:
+            commands.append("/autotest")
         return commands
-
-    def dispatch_command(self, cmd_name, args):
-        cmd_method_name = f"cmd_{cmd_name}"
-        cmd_method = getattr(self, cmd_method_name, None)
-        if not cmd_method:
-            # Handle special case for systemcard command
-            if cmd_name == "systemcard":
-                return self.cmd_systemcard(args)
-            self.io.tool_output(f"Error: Command {cmd_name} not found.")
-            return
-
-        try:
-            return cmd_method(args)
-        except ANY_GIT_ERROR as err:
-            self.io.tool_error(f"Unable to complete {cmd_name}: {err}")
-            
-    def cmd_systemcard(self, args):
-        """Create or update the project system card for better context awareness"""
-        import logging
-        
-        # Detect test environment
-        is_test = self._is_test_environment()
-        logging.debug(f"_is_test_environment returned: {is_test}")
-        
-        # Path for storing the system card
-        systemcard_path = Path(self.coder.root) / "aider.systemcard.yaml"
-        
-        # Check if prompt_ask has been mocked for testing
-        has_mocked_prompt = hasattr(self.io, 'prompt_ask') and (
-            hasattr(self.io.prompt_ask, 'side_effect') or 
-            hasattr(self.io.prompt_ask, 'return_value')
-        )
-        
-        # Early return for unmocked test environments
-        if is_test and not has_mocked_prompt:
-            logging.debug("Test environment detected without mocked prompt. Using default values.")
-            self.io.tool_output("Test environment detected. Skipping interactive prompts.")
-            system_card = {
-                "project": {
-                    "name": "test-project",
-                    "description": "Test project description",
-                    "architecture": "MVC"
-                },
-                "technologies": {
-                    "language": "Python",
-                    "framework": "Flask",
-                    "database": "SQLite",
-                    "os": "test-os",
-                    "python": "3.x.x",
-                    "docker": False,
-                    "git": True
-                },
-                "requirements": {
-                    "functional": ["Test requirement 1", "Test requirement 2"],
-                    "non_functional": ["Performance", "Security"]
-                }
-            }
-            self.io.tool_output("System card would be created with the following content:")
-            self.io.tool_output(system_card)
-            return
-        
-        # Start the interactive process
-        self.io.tool_output("Let's create a system card for your project!")
-        self.io.tool_output("This will help me understand your project better.")
-        
-        # Check if we already have a system card
-        if systemcard_path.exists():
-            logging.debug(f"Found existing system card at {systemcard_path}")
-            self.io.tool_output(f"Found existing system card at {systemcard_path}")
-            try:
-                with open(systemcard_path, "r") as f:
-                    current_content = f.read()
-                    logging.debug("Read current system card content")
-                    self.io.tool_output("\nCurrent System Card:")
-                    self.io.tool_output("-----------------")
-                    self.io.tool_output(current_content)
-                    self.io.tool_output("-----------------")
-                    
-                has_mocked_confirm = hasattr(self.io, 'confirm_ask') and (
-                    hasattr(self.io.confirm_ask, 'side_effect') or 
-                    hasattr(self.io.confirm_ask, 'return_value')
-                )
-                
-                if is_test and not has_mocked_confirm:
-                    # Default behavior for tests without mocked confirm_ask
-                    update_card = False
-                    logging.debug("Test environment: defaulting to not updating card")
-                else:
-                    update_card = self.io.confirm_ask("Would you like to update this system card?")
-                    logging.debug(f"User chose to {'update' if update_card else 'not update'} the system card")
-                
-                if not update_card:
-                    self.io.tool_output("System card will remain unchanged.")
-                    return
-            except Exception as e:
-                logging.error(f"Error reading system card: {e}")
-                self.io.tool_warning(f"Could not read existing system card: {e}")
-        
-        # Initialize the system card structure
-        logging.debug("Initializing new system card structure")
-        system_card = {
-            "project": {},
-            "technologies": {},
-            "requirements": {
-                "functional": [],
-                "non_functional": []
-            },
-            "deployment": {},
-            "project_structure": {}
-        }
-        
-        # Analyze environment if possible
-        try:
-            import platform
-            system_card["technologies"]["os"] = platform.system()
-            system_card["technologies"]["python"] = platform.python_version()
-            
-            # Check if Docker is installed
-            from aider.run_cmd import run_cmd
-            exit_code, _ = run_cmd("docker --version", verbose=False, error_print=lambda x: None)
-            system_card["technologies"]["docker"] = exit_code == 0
-            
-            # Check for git
-            if self.coder.repo:
-                system_card["technologies"]["git"] = True
-                try:
-                    system_card["project"]["name"] = Path(self.coder.root).name
-                except:
-                    pass
-            
-            # Look for common files
-            for file in ["requirements.txt", "pyproject.toml", "package.json", "Dockerfile"]:
-                file_path = Path(self.coder.root) / file
-                if file_path.exists():
-                    system_card["technologies"][file] = True
-        except Exception as e:
-            logging.error(f"Error during environment analysis: {e}")
-            self.io.tool_warning(f"Error during environment analysis: {e}")
-        
-        # Get interactive input
-        self.io.tool_output("\nLet's get some basic information about your project:")
-        # Project info
-        name = self.io.prompt_ask("Project name: ") or system_card["project"].get("name", "")
-        description = self.io.prompt_ask("Project description: ")
-        # Technologies
-        language = self.io.prompt_ask("Primary programming language: ") or system_card["technologies"].get("python", "Python")
-        framework = self.io.prompt_ask("Framework(s): ")
-        database = self.io.prompt_ask("Database(s): ")
-        # Architecture
-        architecture = self.io.prompt_ask("Architecture pattern (e.g., MVC, Microservices): ")
-        
-        # Get some requirements
-        self.io.tool_output("\nList some key requirements (leave blank to finish):")
-        func_reqs = []
-        
-        # Pre-collect all functional requirements
-        i = 1
-        while True:
-            prompt = f"Functional requirement {i}: "
-            req = self.io.prompt_ask(prompt)
-            logging.debug(f"Got functional requirement {i}: '{req}'")
-            if not req:
-                break
-            func_reqs.append(req)
-            i += 1
-        
-        # Pre-collect all non-functional requirements
-        non_func_reqs = []
-        i = 1
-        while True:
-            prompt = f"Non-functional requirement {i}: "
-            req = self.io.prompt_ask(prompt)
-            logging.debug(f"Got non-functional requirement {i}: '{req}'")
-            if not req:
-                break
-            non_func_reqs.append(req)
-            i += 1
-        
-        # Populate the system card
-        system_card["project"]["name"] = name
-        system_card["project"]["description"] = description
-        system_card["technologies"]["language"] = language
-        if framework:
-            system_card["technologies"]["framework"] = framework
-        if database:
-            system_card["technologies"]["database"] = database
-        if architecture:
-            system_card["project"]["architecture"] = architecture
-        
-        # Add requirements
-        system_card["requirements"]["functional"] = func_reqs
-        system_card["requirements"]["non_functional"] = non_func_reqs
-                
-        # Format the system card as YAML
-        try:
-            import yaml
-            yaml_content = yaml.dump(system_card, default_flow_style=False, sort_keys=False)
-            
-            # Write to file
-            with open(systemcard_path, "w") as f:
-                f.write(yaml_content)
-                
-            self.io.tool_output(f"\nSystem card created successfully at {systemcard_path}")
-            
-            self.io.tool_output("\nSystem Card Contents:")
-            self.io.tool_output("-----------------")
-            self.io.tool_output(yaml_content)
-            self.io.tool_output("-----------------")
-            
-            # Add to git if desired
-            if self.coder.repo and self.io.confirm_ask("Would you like to add the system card to git?"):
-                try:
-                    self.coder.repo.add_to_repo(str(systemcard_path))
-                    self.io.tool_output("System card added to git repository.")
-                except Exception as e:
-                    self.io.tool_error(f"Failed to add system card to git repository: {e}")
-            
-            # Suggest next steps
-            self.io.tool_output("\nYou can edit this file directly or run /systemcard again to update it.")
-            self.io.tool_output("I'll use this information to provide more context-aware assistance with your project.")
-            
-        except ImportError:
-            self.io.tool_error("Could not import yaml. Please install PyYAML to use this feature.")
-        except Exception as e:
-            logging.error(f"Error creating system card: {e}")
-            self.io.tool_error(f"Failed to create system card: {e}")
-        
-        return
-
-    def matching_commands(self, inp):
-        words = inp.strip().split()
-        if not words:
-            return
-
-        first_word = words[0]
-        rest_inp = inp[len(words[0]) :].strip()
-
-        # Replace hyphens with underscores for method name lookup
-        lookup_word = first_word.replace("-", "_")
-
-        all_commands = self.get_commands()
-        matching_commands = [cmd for cmd in all_commands if cmd.startswith(lookup_word)]
-        return matching_commands, first_word, rest_inp
-
-    def run(self, inp):
-        if inp.startswith("!"):
-            self.coder.event("command_run")
-            return self.do_run("run", inp[1:])
-
-        res = self.matching_commands(inp)
-        if res is None:
-            return
-        matching_commands, first_word, rest_inp = res
-        if len(matching_commands) == 1:
-            command = matching_commands[0][1:]
-            self.coder.event(f"command_{command}")
-            return self.do_run(command, rest_inp)
-        elif len(matching_commands) > 1:
-            if first_word in matching_commands:
-                return self.do_run(first_word[1:], rest_inp)
-            self.io.tool_error(f"Command {first_word} is ambiguous: {', '.join(matching_commands)}")
-            return
-    
-    def do_run(self, cmd_name, args):
-        """Execute a command by name with the given arguments."""
-        return self.dispatch_command(cmd_name, args)
-    
-    def get_raw_completions(self, cmd):
-        completion_method_name = "completions_raw_" + cmd
-        raw_completer = getattr(self, completion_method_name, None)
-        return raw_completer
-
-    def cmd_commit(self, args=None):
-        "Commit edits to the repo made outside the chat (commit message optional)"
-        try:
-            self.raw_cmd_commit(args)
-        except ANY_GIT_ERROR as err:
-            self.io.tool_error(f"Unable to complete commit: {err}")
-
-    def raw_cmd_commit(self, args=None):
-        if not self.coder.repo:
-            self.io.tool_error("No git repository found.")
-            return
-
-        if not self.coder.repo.is_dirty():
-            self.io.tool_warning("No more changes to commit.")
-            return
-
-        commit_message = args.strip() if args else None
-        self.coder.repo.commit(message=commit_message)
-
-    def cmd_lint(self, args="", fnames=None):
-        "Lint and fix in-chat files or all dirty files if none in chat"
-
-        if not self.coder.repo:
-            self.io.tool_error("No git repository found.")
-            return
-
-        if not fnames:
-            fnames = self.coder.get_inchat_relative_files()
-
-        # If still no files, get all dirty files in the repo
-        if not fnames and self.coder.repo:
-            fnames = self.coder.repo.get_dirty_files()
-
-        if not fnames:
-            self.io.tool_warning("No dirty files to lint.")
-            return
-
-        fnames = [self.coder.abs_root_path(fname) for fname in fnames]
-
-        lint_coder = None
-        for fname in fnames:
-            try:
-                errors = self.coder.linter.lint(fname)
-            except FileNotFoundError as err:
-                self.io.tool_error(f"Unable to lint {fname}")
-                self.io.tool_output(str(err))
-                continue
-
-            if not errors:
-                continue
-
-            self.io.tool_output(errors)
-            if not self.io.confirm_ask(f"Fix lint errors in {fname}?", default="y"):
-                continue
-
-            # Commit everything before we start fixing lint errors
-            if self.coder.repo.is_dirty() and self.coder.dirty_commits:
-                self.cmd_commit("")
-
-            if not lint_coder:
-                lint_coder = self.coder.clone(
-                    # Clear the chat history, fnames
-                    cur_messages=[],
-                    done_messages=[],
-                    fnames=None,
-                )
-
-            lint_coder.add_rel_fname(fname)
-            lint_coder.run(errors)
-            lint_coder.abs_fnames = set()
-
-        if lint_coder and self.coder.repo.is_dirty() and self.coder.auto_commits:
-            self.cmd_commit("")
-
-    def cmd_clear(self, args):
-        "Clear the chat history"
-
-        self._clear_chat_history()
-
-    def _drop_all_files(self):
-        self.coder.abs_fnames = set()
-        self.coder.abs_read_only_fnames = set()
-
-    def _clear_chat_history(self):
-        self.coder.done_messages = []
-        self.coder.cur_messages = []
-
-    def cmd_reset(self, args):
-        "Drop all files and clear the chat history"
-        self._drop_all_files()
-        self._clear_chat_history()
-        self.io.tool_output("All files dropped and chat history cleared.")
-
-    def cmd_tokens(self, args):
-        "Report on the number of tokens used by the current chat context"
-
-        res = []
-
-        self.coder.choose_fence()
-
-        # system messages
-        main_sys = self.coder.fmt_system_prompt(self.coder.gpt_prompts.main_system)
-        main_sys += "\n" + self.coder.fmt_system_prompt(self.coder.gpt_prompts.system_reminder)
-        msgs = [
-            dict(role="system", content=main_sys),
-            dict(
-                role="system",
-                content=self.coder.fmt_system_prompt(self.coder.gpt_prompts.system_reminder),
-            ),
-        ]
-
-        tokens = self.coder.main_model.token_count(msgs)
-        res.append((tokens, "system messages", ""))
-
-        # chat history
-        msgs = self.coder.done_messages + self.coder.cur_messages
-        if msgs:
-            tokens = self.coder.main_model.token_count(msgs)
-            res.append((tokens, "chat history", "use /clear to clear"))
-
-        # repo map
-        other_files = set(self.coder.get_all_abs_files()) - set(self.coder.abs_fnames)
-        if self.coder.repo_map:
-            repo_content = self.coder.repo_map.get_repo_map(self.coder.abs_fnames, other_files)
-            if repo_content:
-                tokens = self.coder.main_model.token_count(repo_content)
-                res.append((tokens, "repository map", "use --map-tokens to resize"))
-
-        fence = "`" * 3
-
-        file_res = []
-        # files
-        for fname in self.coder.abs_fnames:
-            relative_fname = self.coder.get_rel_fname(fname)
-            content = self.io.read_text(fname)
-            if is_image_file(relative_fname):
-                tokens = self.coder.main_model.token_count_for_image(fname)
-            else:
-                # approximate
-                content = f"{relative_fname}\n{fence}\n" + content + "{fence}\n"
-                tokens = self.coder.main_model.token_count(content)
-            file_res.append((tokens, f"{relative_fname}", "/drop to remove"))
-
-        # read-only files
-        for fname in self.coder.abs_read_only_fnames:
-            relative_fname = self.coder.get_rel_fname(fname)
-            content = self.io.read_text(fname)
-            if content is not None and not is_image_file(relative_fname):
-                # approximate
-                content = f"{relative_fname}\n{fence}\n" + content + "{fence}\n"
-                tokens = self.coder.main_model.token_count(content)
-                file_res.append((tokens, f"{relative_fname} (read-only)", "/drop to remove"))
-
-        file_res.sort()
-        res.extend(file_res)
-
-        self.io.tool_output(
-            f"Approximate context window usage for {self.coder.main_model.name}, in tokens:"
-        )
-        self.io.tool_output()
-
-        width = 8
-        cost_width = 9
-
-        def fmt(v):
-            return format(int(v), ",").rjust(width)
-
-        col_width = max(len(row[1]) for row in res)
-
-        cost_pad = " " * cost_width
-        total = 0
-        total_cost = 0.0
-        for tk, msg, tip in res:
-            total += tk
-            cost = tk * (self.coder.main_model.info.get("input_cost_per_token") or 0)
-            total_cost += cost
-            msg = msg.ljust(col_width)
-            self.io.tool_output(f"${cost:7.4f} {fmt(tk)} {msg} {tip}")  # noqa: E231
-
-        self.io.tool_output("=" * (width + cost_width + 1))
-        self.io.tool_output(f"${total_cost:7.4f} {fmt(total)} tokens total")  # noqa: E231
-
-        limit = self.coder.main_model.info.get("max_input_tokens") or 0
-        if not limit:
-            return
-
-        remaining = limit - total
-        if remaining > 1024:
-            self.io.tool_output(f"{cost_pad}{fmt(remaining)} tokens remaining in context window")
-        elif remaining > 0:
-            self.io.tool_error(
-                f"{cost_pad}{fmt(remaining)} tokens remaining in context window (use /drop or"
-                " /clear to make space)"
-            )
-        else:
-            self.io.tool_error(
-                f"{cost_pad}{fmt(remaining)} tokens remaining, window exhausted (use /drop or"
-                " /clear to make space)"
-            )
-        self.io.tool_output(f"{cost_pad}{fmt(limit)} tokens max context window size")
-
-    def cmd_undo(self, args):
-        "Undo the last git commit if it was done by aider"
-        try:
-            self.raw_cmd_undo(args)
-        except ANY_GIT_ERROR as err:
-            self.io.tool_error(f"Unable to complete undo: {err}")
-
-    def raw_cmd_undo(self, args):
-        if not self.coder.repo:
-            self.io.tool_error("No git repository found.")
-            return
-
-        last_commit = self.coder.repo.get_head_commit()
-        if not last_commit or not last_commit.parents:
-            self.io.tool_error("This is the first commit in the repository. Cannot undo.")
-            return
-
-        last_commit_hash = self.coder.repo.get_head_commit_sha(short=True)
-        last_commit_message = self.coder.repo.get_head_commit_message("(unknown)").strip()
-        if last_commit_hash not in self.coder.aider_commit_hashes:
-            self.io.tool_error("The last commit was not made by aider in this chat session.")
-            self.io.tool_output(
-                "You could try `/git reset --hard HEAD^` but be aware that this is a destructive"
-                " command!"
-            )
-            return
-
-        if len(last_commit.parents) > 1:
-            self.io.tool_error(
-                f"The last commit {last_commit.hexsha} has more than 1 parent, can't undo."
-            )
-            return
-
-        prev_commit = last_commit.parents[0]
-        changed_files_last_commit = [item.a_path for item in last_commit.diff(prev_commit)]
-
-        for fname in changed_files_last_commit:
-            if self.coder.repo.repo.is_dirty(path=fname):
-                self.io.tool_error(
-                    f"The file {fname} has uncommitted changes. Please stash them before undoing."
-                )
-                return
-
-            # Check if the file was in the repo in the previous commit
-            try:
-                prev_commit.tree[fname]
-            except KeyError:
-                self.io.tool_error(
-                    f"The file {fname} was not in the repository in the previous commit. Cannot"
-                    " undo safely."
-                )
-                return
-
-        local_head = self.coder.repo.repo.git.rev_parse("HEAD")
-        current_branch = self.coder.repo.repo.active_branch.name
-        try:
-            remote_head = self.coder.repo.repo.git.rev_parse(f"origin/{current_branch}")
-            has_origin = True
-        except ANY_GIT_ERROR:
-            has_origin = False
-
-        if has_origin:
-            if local_head == remote_head:
-                self.io.tool_error(
-                    "The last commit has already been pushed to the origin. Undoing is not"
-                    " possible."
-                )
-                return
-
-        # Reset only the files which are part of `last_commit`
-        restored = set()
-        unrestored = set()
-        for file_path in changed_files_last_commit:
-            try:
-                self.coder.repo.repo.git.checkout("HEAD~1", file_path)
-                restored.add(file_path)
-            except ANY_GIT_ERROR:
-                unrestored.add(file_path)
-
-        if unrestored:
-            self.io.tool_error(f"Error restoring {file_path}, aborting undo.")
-            self.io.tool_output("Restored files:")
-            for file in restored:
-                self.io.tool_output(f"  {file}")
-            self.io.tool_output("Unable to restore files:")
-            for file in unrestored:
-                self.io.tool_output(f"  {file}")
-            return
-
-        # Move the HEAD back before the latest commit
-        self.coder.repo.repo.git.reset("--soft", "HEAD~1")
-
-        self.io.tool_output(f"Removed: {last_commit_hash} {last_commit_message}")
-
-        # Get the current HEAD after undo
-        current_head_hash = self.coder.repo.get_head_commit_sha(short=True)
-        current_head_message = self.coder.repo.get_head_commit_message("(unknown)").strip()
-        self.io.tool_output(f"Now at:  {current_head_hash} {current_head_message}")
-
-        if self.coder.main_model.send_undo_reply:
-            return prompts.undo_command_reply
-
-    def cmd_diff(self, args=""):
-        "Display the diff of changes since the last message"
-        try:
-            self.raw_cmd_diff(args)
-        except ANY_GIT_ERROR as err:
-            self.io.tool_error(f"Unable to complete diff: {err}")
-
-    def raw_cmd_diff(self, args=""):
-        if not self.coder.repo:
-            self.io.tool_error("No git repository found.")
-            return
-
-        current_head = self.coder.repo.get_head_commit_sha()
-        if current_head is None:
-            self.io.tool_error("Unable to get current commit. The repository might be empty.")
-            return
-
-        if len(self.coder.commit_before_message) < 2:
-            commit_before_message = current_head + "^"
-        else:
-            commit_before_message = self.coder.commit_before_message[-2]
-
-        if not commit_before_message or commit_before_message == current_head:
-            self.io.tool_warning("No changes to display since the last message.")
-            return
-
-        self.io.tool_output(f"Diff since {commit_before_message[:7]}...")
-
-        if self.coder.pretty:
-            run_cmd(f"git diff {commit_before_message}")
-            return
-
-        diff = self.coder.repo.diff_commits(
-            self.coder.pretty,
-            commit_before_message,
-            "HEAD",
-        )
-
-        self.io.print(diff)
-
-    def quote_fname(self, fname):
-        if " " in fname and '"' not in fname:
-            fname = f'"{fname}"'
-        return fname
-
-    def completions_raw_read_only(self, document, complete_event):
-        # Get the text before the cursor
-        text = document.text_before_cursor
-
-        # Skip the first word and the space after it
-        after_command = text.split()[-1]
-
-        # Create a new Document object with the text after the command
-        new_document = Document(after_command, cursor_position=len(after_command))
-
-        def get_paths():
-            return [self.coder.root] if self.coder.root else None
-
-        path_completer = PathCompleter(
-            get_paths=get_paths,
-            only_directories=False,
-            expanduser=True,
-        )
-
-        # Adjust the start_position to replace all of 'after_command'
-        adjusted_start_position = -len(after_command)
-
-        # Collect all completions
-        all_completions = []
-
-        # Iterate over the completions and modify them
-        for completion in path_completer.get_completions(new_document, complete_event):
-            quoted_text = self.quote_fname(after_command + completion.text)
-            all_completions.append(
-                Completion(
-                    text=quoted_text,
-                    start_position=adjusted_start_position,
-                    display=completion.display,
-                    style=completion.style,
-                    selected_style=completion.selected_style,
-                )
-            )
-
-        # Add completions from the 'add' command
-        add_completions = self.completions_add()
-        for completion in add_completions:
-            if after_command in completion:
-                all_completions.append(
-                    Completion(
-                        text=completion,
-                        start_position=adjusted_start_position,
-                        display=completion,
-                    )
-                )
-
-        # Sort all completions based on their text
-        sorted_completions = sorted(all_completions, key=lambda c: c.text)
-
-        # Yield the sorted completions
-        for completion in sorted_completions:
-            yield completion
-
-    def completions_add(self):
-        files = set(self.coder.get_all_relative_files())
-        files = files - set(self.coder.get_inchat_relative_files())
-        files = [self.quote_fname(fn) for fn in files]
-        return files
-
-    def glob_filtered_to_repo(self, pattern):
-        if not pattern.strip():
-            return []
-        try:
-            if os.path.isabs(pattern):
-                # Handle absolute paths
-                raw_matched_files = [Path(pattern)]
-            else:
-                try:
-                    raw_matched_files = list(Path(self.coder.root).glob(pattern))
-                except (IndexError, AttributeError):
-                    raw_matched_files = []
-        except ValueError as err:
-            self.io.tool_error(f"Error matching {pattern}: {err}")
-            raw_matched_files = []
-
-        matched_files = []
-        for fn in raw_matched_files:
-            matched_files += expand_subdir(fn)
-
-        matched_files = [
-            fn.relative_to(self.coder.root)
-            for fn in matched_files
-            if fn.is_relative_to(self.coder.root)
-        ]
-
-        # if repo, filter against it
-        if self.coder.repo:
-            git_files = self.coder.repo.get_tracked_files()
-            matched_files = [fn for fn in matched_files if str(fn) in git_files]
-
-        res = list(map(str, matched_files))
-        return res
-
-    def cmd_add(self, args):
-        "Add files to the chat so aider can edit them or review them in detail"
-
-        all_matched_files = set()
-
-        filenames = parse_quoted_filenames(args)
-        for word in filenames:
-            if Path(word).is_absolute():
-                fname = Path(word)
-            else:
-                fname = Path(self.coder.root) / word
-
-            if self.coder.repo and self.coder.repo.ignored_file(fname):
-                self.io.tool_warning(f"Skipping {fname} due to aiderignore or --subtree-only.")
-                continue
-
-            if fname.exists():
-                if fname.is_file():
-                    all_matched_files.add(str(fname))
-                    continue
-                # an existing dir, escape any special chars so they won't be globs
-                word = re.sub(r"([\*\?\[\]])", r"[\1]", word)
-
-            matched_files = self.glob_filtered_to_repo(word)
-            if matched_files:
-                all_matched_files.update(matched_files)
-                continue
-
-            if "*" in str(fname) or "?" in str(fname):
-                self.io.tool_error(
-                    f"No match, and cannot create file with wildcard characters: {fname}"
-                )
-                continue
-
-            if fname.exists() and fname.is_dir() and self.coder.repo:
-                self.io.tool_error(f"Directory {fname} is not in git.")
-                self.io.tool_output(f"You can add to git with: /git add {fname}")
-                continue
-
-            if self.io.confirm_ask(f"No files matched '{word}'. Do you want to create {fname}?"):
-                try:
-                    fname.parent.mkdir(parents=True, exist_ok=True)
-                    fname.touch()
-                    all_matched_files.add(str(fname))
-                except OSError as e:
-                    self.io.tool_error(f"Error creating file {fname}: {e}")
-
-        for matched_file in sorted(all_matched_files):
-            abs_file_path = self.coder.abs_root_path(matched_file)
-
-            if not abs_file_path.startswith(self.coder.root) and not is_image_file(matched_file):
-                self.io.tool_error(
-                    f"Can not add {abs_file_path}, which is not within {self.coder.root}"
-                )
-                continue
-
-            if self.coder.repo and self.coder.repo.git_ignored_file(matched_file):
-                self.io.tool_error(f"Can't add {matched_file} which is in gitignore")
-                continue
-
-            if abs_file_path in self.coder.abs_fnames:
-                self.io.tool_error(f"{matched_file} is already in the chat as an editable file")
-                continue
-            elif abs_file_path in self.coder.abs_read_only_fnames:
-                if self.coder.repo and self.coder.repo.path_in_repo(matched_file):
-                    self.coder.abs_read_only_fnames.remove(abs_file_path)
-                    self.coder.abs_fnames.add(abs_file_path)
-                    self.io.tool_output(
-                        f"Moved {matched_file} from read-only to editable files in the chat"
-                    )
-                else:
-                    self.io.tool_error(
-                        f"Cannot add {matched_file} as it's not part of the repository"
-                    )
-            else:
-                if is_image_file(matched_file) and not self.coder.main_model.info.get(
-                    "supports_vision"
-                ):
-                    self.io.tool_error(
-                        f"Cannot add image file {matched_file} as the"
-                        f" {self.coder.main_model.name} does not support images."
-                    )
-                    continue
-                content = self.io.read_text(abs_file_path)
-                if content is None:
-                    self.io.tool_error(f"Unable to read {matched_file}")
-                else:
-                    self.coder.abs_fnames.add(abs_file_path)
-                    fname = self.coder.get_rel_fname(abs_file_path)
-                    self.io.tool_output(f"Added {fname} to the chat")
-                    self.coder.check_added_files()
-
-    def completions_drop(self):
-        files = self.coder.get_inchat_relative_files()
-        read_only_files = [self.coder.get_rel_fname(fn) for fn in self.coder.abs_read_only_fnames]
-        all_files = files + read_only_files
-        all_files = [self.quote_fname(fn) for fn in all_files]
-        return all_files
-
-    def cmd_drop(self, args=""):
-        "Remove files from the chat session to free up context space"
-
-        if not args.strip():
-            self.io.tool_output("Dropping all files from the chat session.")
-            self._drop_all_files()
-            return
-
-        filenames = parse_quoted_filenames(args)
-        for word in filenames:
-            # Expand tilde in the path
-            expanded_word = os.path.expanduser(word)
-
-            # Handle read-only files with substring matching and samefile check
-            read_only_matched = []
-            for f in self.coder.abs_read_only_fnames:
-                if expanded_word in f:
-                    read_only_matched.append(f)
-                    continue
-
-                # Try samefile comparison for relative paths
-                try:
-                    abs_word = os.path.abspath(expanded_word)
-                    if os.path.samefile(abs_word, f):
-                        read_only_matched.append(f)
-                except (FileNotFoundError, OSError):
-                    continue
-
-            for matched_file in read_only_matched:
-                self.coder.abs_read_only_fnames.remove(matched_file)
-                self.io.tool_output(f"Removed read-only file {matched_file} from the chat")
-
-            # For editable files, use glob if word contains glob chars, otherwise use substring
-            if any(c in expanded_word for c in "*?[]"):
-                matched_files = self.glob_filtered_to_repo(expanded_word)
-            else:
-                # Use substring matching like we do for read-only files
-                matched_files = [
-                    self.coder.get_rel_fname(f) for f in self.coder.abs_fnames if expanded_word in f
-                ]
-
-            if not matched_files:
-                matched_files.append(expanded_word)
-
-            for matched_file in matched_files:
-                abs_fname = self.coder.abs_root_path(matched_file)
-                if abs_fname in self.coder.abs_fnames:
-                    self.coder.abs_fnames.remove(abs_fname)
-                    self.io.tool_output(f"Removed {matched_file} from the chat")
-
-    def cmd_git(self, args):
-        "Run a git command (output excluded from chat)"
-        combined_output = None
-        try:
-            args = "git " + args
-            env = dict(subprocess.os.environ)
-            env["GIT_EDITOR"] = "true"
-            result = subprocess.run(
-                args,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                env=env,
-                shell=True,
-                encoding=self.io.encoding,
-                errors="replace",
-            )
-            combined_output = result.stdout
-        except Exception as e:
-            self.io.tool_error(f"Error running /git command: {e}")
-
-        if combined_output is None:
-            return
-
-        self.io.tool_output(combined_output)
-
-    def cmd_test(self, args):
-        "Run a shell command and add the output to the chat on non-zero exit code"
-        if not args and self.coder.test_cmd:
-            args = self.coder.test_cmd
-
-        if not args:
-            return
-
-        # Store the original command for task tracking
-        test_cmd = args if isinstance(args, str) else "custom test function"
-
-        if not callable(args):
-            if type(args) is not str:
-                raise ValueError(repr(args))
-            exit_status, errors = self._run_test_cmd(args)
-        else:
-            errors = args()
-            exit_status = 1 if errors else 0
-
-        if not errors:
-            # Test passed, reset failures if in a task
-            self._handle_test_success(test_cmd)
-            return
-
-        # Test failed, track in task if applicable
-        should_research = self._handle_test_failure(test_cmd, errors)
-
-        self.io.tool_output(errors)
-        
-        # If we reached the threshold for automatic research, suggest it
-        if should_research:
-            self._offer_test_research(test_cmd, errors)
-
-        return errors
-        
-    def _run_test_cmd(self, cmd):
-        """Run a test command and return exit status and output."""
-        exit_status, combined_output = run_cmd(
-            cmd, verbose=self.verbose, error_print=self.io.tool_error, cwd=self.coder.root
-        )
-        return exit_status, combined_output
-        
-    def _handle_test_success(self, test_cmd):
-        """Handle a successful test run, resetting failures if in a task."""
-        task_manager = get_task_manager()
-        active_task = task_manager.get_active_task()
-        
-        if active_task and active_task.test_info:
-            # Reset failure counts for all failing tests
-            if active_task.test_info.failing_tests:
-                for test_name in list(active_task.test_info.failing_tests):
-                    task_manager.reset_test_failures(active_task.id, test_name)
-                self.io.tool_output("Test passed! Reset failure tracking.")
-                
-                # Add successful solution to task history
-                for test_name in list(active_task.test_info.failing_tests):
-                    task_manager.add_attempted_solution(
-                        active_task.id, 
-                        test_name, 
-                        "Recent code changes fixed this test", 
-                        True
-                    )
-        
-    def _handle_test_failure(self, test_cmd, errors):
-        """Handle a test failure, tracking it in the active task if there is one."""
-        task_manager = get_task_manager()
-        active_task = task_manager.get_active_task()
-        
-        if not active_task:
-            return False
-            
-        # Extract test names from errors - this is a simplified example
-        # In practice, you would parse the errors more carefully based on test framework
-        import re
-        test_names = []
-        
-        # Look for common test failure patterns
-        # This is just an example - you would need to adapt to your test output format
-        patterns = [
-            r'(?:FAIL|ERROR)(?:ED)?\s*(?::|::\s*|\s+)([^\n:]+)',  # pytest, jest, etc.
-            r'(?:not ok|fail)\s+\d+\s+-\s+([^\n]+)',              # tap format
-            r'(?:Assertion failed|Test failed)(?::|::\s*|\s+)([^\n:]+)',  # generic
-        ]
-        
-        for pattern in patterns:
-            matches = re.finditer(pattern, errors, re.IGNORECASE)
-            for match in matches:
-                test_name = match.group(1).strip()
-                if test_name:
-                    test_names.append(test_name)
-        
-        # If no specific tests identified, use the command as the test name
-        if not test_names:
-            test_names = [test_cmd]
-            
-        # Track each failing test
-        exceeded_threshold = False
-        for test_name in test_names:
-            if task_manager.add_test_failure(active_task.id, test_name):
-                exceeded_threshold = True
-                
-        return exceeded_threshold
-        
-    def _offer_test_research(self, test_cmd, errors):
-        """Offer to research the test failure and suggest solutions."""
-        task_manager = get_task_manager()
-        active_task = task_manager.get_active_task()
-        
-        # Check if auto-test-tasks is enabled
-        if hasattr(self, 'args') and getattr(self.args, 'auto_test_tasks', False):
-            self._auto_resolve_test_failure(test_cmd, errors)
-            return
-        
-        if not active_task or not active_task.test_info:
-            return
-            
-        self.io.tool_output("\nThis test has failed multiple times. Would you like me to:")
-        options = [
-            "Research similar tests in the codebase",
-            "Analyze the test requirements more carefully",
-            "Suggest a different implementation approach",
-            "Review previous failed attempts"
-        ]
-        
-        for i, option in enumerate(options, 1):
-            self.io.tool_output(f"{i}. {option}")
-            
-        choice = self.io.confirm_ask("Would you like me to help with this test failure?")
-        if choice:
-            # Here you would typically use the help functionality or a special research mode
-            # For now, we'll just add the suggestion to try again with a more careful analysis
-            research_message = f"""
-I notice that this test has failed multiple times. Let me analyze it more carefully.
-
-The test command was: {test_cmd}
-
-The error output is:
-{errors[:500]}...
-
-Let me review the test requirements carefully and suggest a new approach.
-"""
-            self.coder.cur_messages += [
-                dict(role="user", content=research_message),
-            ]
-            
-    def _auto_resolve_test_failure(self, test_cmd, errors):
-        """
-        Automatically resolve test failures by creating tasks and having the LLM fix them.
-        This is used when --auto-test-tasks is enabled.
-        """
-        task_manager = get_task_manager()
-        
-        # Extract test names from errors
-        import re
-        test_names = []
-        
-        # Look for common test failure patterns
-        patterns = [
-            r'(?:FAIL|ERROR)(?:ED)?\s*(?::|::\s*|\s+)([^\n:]+)',  # pytest, jest, etc.
-            r'(?:not ok|fail)\s+\d+\s+-\s+([^\n]+)',              # tap format
-            r'(?:Assertion failed|Test failed)(?::|::\s*|\s+)([^\n:]+)',  # generic
-            r'(?:Test Failed|Failure|Failed)\s*:?\s*([^\n]+)',    # other formats
-        ]
-        
-        for pattern in patterns:
-            matches = re.finditer(pattern, errors, re.IGNORECASE)
-            for match in matches:
-                test_name = match.group(1).strip()
-                if test_name:
-                    test_names.append(test_name)
-        
-        # If no specific tests identified, use the command as the test name
-        if not test_names:
-            test_names = ["Unknown test failure"]
-            
-        # Process each failing test
-        for test_name in test_names:
-            self._process_failing_test(test_name, test_cmd, errors)
-    
-    def _process_failing_test(self, test_name, test_cmd, errors):
-        """
-        Process a single failing test, creating a task if needed and attempting to fix it.
-        """
-        task_manager = get_task_manager()
-        
-        # Check if we already have a task for this test
-        task_name = f"Fix test: {test_name}"
-        task = task_manager.get_task_by_name(task_name)
-        
-        if not task:
-            # Create a new task for this failing test
-            task = task_manager.create_task(task_name, f"Automatically fix failing test: {test_name}")
-            self.io.tool_output(f"Created task for failing test: {test_name}")
-            
-            # Associate current files with the task
-            for fname in self.coder.abs_fnames:
-                rel_fname = self.coder.get_rel_fname(fname)
-                task.add_files([rel_fname])
-        
-        # Check how many attempts we've made and if we should continue
-        retry_limit = getattr(self.args, 'auto_test_retry_limit', 5)
-        
-        if task.test_info and test_name in task.test_info.failure_counts:
-            attempt_count = task.test_info.failure_counts[test_name]
-            
-            # If we've reached the limit, notify but don't continue
-            if attempt_count >= retry_limit:
-                self.io.tool_error(f"Reached retry limit ({retry_limit}) for test: {test_name}")
-                self.io.tool_output("Please manually address this test failure.")
-                return
-        
-        # Switch to this task if we're not already on it
-        active_task = task_manager.get_active_task()
-        if not active_task or active_task.id != task.id:
-            # Save current context
-            if active_task:
-                current_files = [self.coder.get_rel_fname(fname) for fname in self.coder.abs_fnames]
-                active_task.add_files(current_files)
-                
-                if self.coder.cur_messages:
-                    # Properly serialize the conversation context instead of using str()
-                    # This will prevent Task objects from being incorrectly added to messages
-                    chat_context = json.dumps([
-                        {k: str(v) if not isinstance(v, (str, int, float, bool, type(None))) else v 
-                         for k, v in msg.items()} 
-                        for msg in self.coder.cur_messages
-                    ])
-                    active_task.add_conversation_context(chat_context)
-                
-                task_manager.update_task(active_task)
-            
-            # Switch to the test task
-            task_manager.switch_task(task.id)
-            self.io.tool_output(f"Switched to task: {task_name}")
-        
-        # Update the test failure count
-        task_manager.add_test_failure(task.id, test_name)
-        
-        # Generate a message for fixing the test
-        fix_message = self._generate_test_fix_message(test_name, test_cmd, errors, task)
-        
-        # Add to the chat and let the model generate a fix
-        self.coder.cur_messages += [
-            dict(role="user", content=fix_message),
-        ]
-        
-    def _generate_test_fix_message(self, test_name, test_cmd, errors, task):
-        """
-        Generate a message asking the model to fix the failing test,
-        including context from previous attempts.
-        """
-        task_manager = get_task_manager()
-        attempt_count = 1
-        previous_attempts = ""
-        
-        if task.test_info and test_name in task.test_info.failure_counts:
-            attempt_count = task.test_info.failure_counts[test_name]
-            
-            # Add information about previous attempts
-            if task.test_info.attempted_solutions:
-                solutions = task_manager.get_attempted_solutions(task.id, test_name)
-                if solutions:
-                    previous_attempts = "\n\n## Previous Solution Attempts\n\n"
-                    for i, solution in enumerate(solutions, 1):
-                        previous_attempts += f"### Attempt {i}\n\n"
-                        previous_attempts += f"Solution tried: {solution['solution'][:200]}...\n\n"
-                        previous_attempts += f"Result: {'Successful' if solution['successful'] else 'Failed'}\n\n"
-        
-        # Create a message with appropriate context for the current attempt
-        if attempt_count == 1:
-            # First attempt - straightforward fix request
-            message = f"""
-I need to fix a failing test. Please help me resolve this test failure:
-
-## Test Information
-- Test name: {test_name}
-- Test command: {test_cmd}
-
-## Error Output
-```
-{errors[:1000]}
-```
-
-Please analyze the error and implement a fix for this failing test.
-"""
-        elif attempt_count <= 3:
-            # Early attempts - look more carefully
-            message = f"""
-This test has failed {attempt_count} times. Let's look more deeply at the issue:
-
-## Test Information
-- Test name: {test_name}
-- Test command: {test_cmd}
-
-## Error Output
-```
-{errors[:1000]}
-```
-
-{previous_attempts}
-
-For this attempt, please:
-1. Analyze the test requirements more carefully
-2. Check for subtle issues that might be causing the failure
-3. Consider edge cases and input validation
-4. Implement a fix that addresses the root cause
-"""
-        else:
-            # Later attempts - thorough investigation
-            message = f"""
-This test has failed {attempt_count} times despite multiple fix attempts. Let's perform a thorough investigation:
-
-## Test Information
-- Test name: {test_name}
-- Test command: {test_cmd}
-
-## Error Output
-```
-{errors[:1000]}
-```
-
-{previous_attempts}
-
-For this attempt, please:
-1. Perform a comprehensive analysis of the test failure
-2. Search for similar patterns in other tests that work correctly
-3. Check if there are fundamental assumptions or environment issues
-4. Consider if the test itself might need to be modified
-5. Implement a solution that addresses the deeper issues
-
-This is attempt {attempt_count} of {getattr(self.args, 'auto_test_retry_limit', 5)} before escalation.
-"""
-        
-        return message
-
-    def cmd_run(self, args, add_on_nonzero_exit=False):
-        "Run a shell command and optionally add the output to the chat (alias: !)"
-        exit_status, combined_output = run_cmd(
-            args, verbose=self.verbose, error_print=self.io.tool_error, cwd=self.coder.root
-        )
-
-        if combined_output is None:
-            return
-
-        # Calculate token count of output
-        token_count = self.coder.main_model.token_count(combined_output)
-        k_tokens = token_count / 1000
-
-        if add_on_nonzero_exit:
-            add = exit_status != 0
-        else:
-            add = self.io.confirm_ask(f"Add {k_tokens:.1f}k tokens of command output to the chat?")
-
-        if add:
-            num_lines = len(combined_output.strip().splitlines())
-            line_plural = "line" if num_lines == 1 else "lines"
-            self.io.tool_output(f"Added {num_lines} {line_plural} of output to the chat.")
-
-            msg = prompts.run_output.format(
-                command=args,
-                output=combined_output,
-            )
-
-            self.coder.cur_messages += [
-                dict(role="user", content=msg),
-                dict(role="assistant", content="Ok."),
-            ]
-
-            if add and exit_status != 0:
-                self.io.placeholder = "What's wrong? Fix"
-
-    def cmd_exit(self, args):
-        "Exit the application"
-        self.coder.event("exit", reason="/exit")
-        sys.exit()
-
-    def cmd_quit(self, args):
-        "Exit the application"
-        self.cmd_exit(args)
-
-    def cmd_ls(self, args):
-        "List all known files and indicate which are included in the chat session"
-
-        files = self.coder.get_all_relative_files()
-
-        other_files = []
-        chat_files = []
-        read_only_files = []
-        for file in files:
-            abs_file_path = self.coder.abs_root_path(file)
-            if abs_file_path in self.coder.abs_fnames:
-                chat_files.append(file)
-            else:
-                other_files.append(file)
-
-        # Add read-only files
-        for abs_file_path in self.coder.abs_read_only_fnames:
-            rel_file_path = self.coder.get_rel_fname(abs_file_path)
-            read_only_files.append(rel_file_path)
-
-        if not chat_files and not other_files and not read_only_files:
-            self.io.tool_output("\nNo files in chat, git repo, or read-only list.")
-            return
-
-        if other_files:
-            self.io.tool_output("Repo files not in the chat:\n")
-        for file in other_files:
-            self.io.tool_output(f"  {file}")
-
-        if read_only_files:
-            self.io.tool_output("\nRead-only files:\n")
-        for file in read_only_files:
-            self.io.tool_output(f"  {file}")
-
-        if chat_files:
-            self.io.tool_output("\nFiles in chat:\n")
-        for file in chat_files:
-            self.io.tool_output(f"  {file}")
 
     def basic_help(self):
         commands = sorted(self.get_commands())
@@ -1573,68 +259,883 @@ This is attempt {attempt_count} of {getattr(self.args, 'auto_test_retry_limit', 
         self.io.tool_output()
         self.io.tool_output("Use `/help <question>` to ask questions about how to use aider.")
 
-    def cmd_help(self, args):
-        "Ask questions about aider"
+    def get_help_md(self):
+        """Return the help markdown text for Aider functions."""
+        md = ""
+        commands = sorted(self.get_commands())
+        for cmd in commands:
+            cmd_method_name = f"cmd_{cmd[1:]}".replace("-", "_")
+            cmd_method = getattr(self, cmd_method_name, None)
+            if cmd_method and cmd_method.__doc__:
+                cmd_help = cmd_method.__doc__.strip()
+                md += f"## {cmd}\n\n{cmd_help}\n\n"
+            else:
+                md += f"## {cmd}\n\nNo documentation available.\n\n"
+        return md
 
-        if not args.strip():
-            self.basic_help()
+    def dispatch_command(self, cmd_name, args):
+        cmd_method_name = f"cmd_{cmd_name}"
+        cmd_method = getattr(self, cmd_method_name, None)
+        if not cmd_method:
+            # Handle special case for systemcard command
+            if cmd_name == "systemcard":
+                return self.cmd_systemcard(args)
+            self.io.tool_output(f"Error: Command {cmd_name} not found.")
             return
 
-        self.coder.event("interactive help")
-        from aider.coders.base_coder import Coder
+        try:
+            return cmd_method(args)
+        except ANY_GIT_ERROR as err:
+            self.io.tool_error(f"Unable to complete {cmd_name}: {err}")
+            
+    def cmd_systemcard(self, args):
+        """Analyze your project and create a system card with essential information"""
+        # Check if this is being called from architect mode
+        is_architect_mode = getattr(self, "_is_architect_mode", False)
+        
+        # Get git root
+        git_root = self.coder.root
+        if not git_root:
+            self.io.tool_error("Not in a git repository")
+            return
+        
+        # Path for the system card
+        systemcard_path = Path(git_root) / "aider.systemcard.yaml"
+        
+        if args.strip() == "clear" and systemcard_path.exists():
+            if self.io.confirm_ask("Are you sure you want to delete the system card?"):
+                os.remove(systemcard_path)
+                self.io.tool_output("System card deleted.")
+            return
+        
+        # Dry run option
+        if args.strip() == "dry-run":
+            self.io.tool_output("This is a dry run - no file will be created or modified")
+            
+            # Look at the files in the repo
+            import subprocess
+            try:
+                # Get a list of files tracked by git
+                result = subprocess.run(
+                    ["git", "ls-files"],
+                    cwd=git_root,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                files = result.stdout.splitlines()
+                
+                # Filter out irrelevant files
+                ignored_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.ico', '.svg', '.mp3', '.mp4', '.pdf']
+                ignored_directories = ['.git', '__pycache__', 'node_modules', '.venv', 'venv', 'env', 'dist', 'build']
+                
+                filtered_files = []
+                for file in files:
+                    if not any(file.startswith(d + '/') or file == d for d in ignored_directories) and \
+                       not any(file.endswith(ext) for ext in ignored_extensions):
+                        filtered_files.append(file)
+                
+                # Use an LLM to analyze the codebase
+                system_card = self._generate_system_card(filtered_files, git_root)
+                
+                # Print the system card
+                try:
+                    import yaml
+                    self.io.tool_output("System card would be created with the following content:")
+                    self.io.tool_output(yaml.dump(system_card, default_flow_style=False, sort_keys=False))
+                except Exception as e:
+                    self.io.tool_output("System card would be created but cannot display content due to error:")
+                    self.io.tool_output(str(e))
+                    self.io.tool_output(str(system_card))
+            except Exception as e:
+                self.io.tool_warning(f"Error processing system card for tasks: {e}")
 
-        if not self.help:
-            res = install_help_extra(self.io)
-            if not res:
-                self.io.tool_error("Unable to initialize interactive help.")
+    def _create_tasks_from_systemcard(self, system_card, task_manager):
+        """Create initial tasks based on system card content"""
+        self.io.tool_output("Analyzing system card to create tasks...")
+        
+        # Use the LLM to generate tasks based on the system card
+        import yaml
+        yaml_content = yaml.dump(system_card, default_flow_style=False, sort_keys=False)
+        
+        task_prompt = f"""
+        I'm going to analyze the following system card for a software project and create a list of well-defined tasks.
+        
+        System Card:
+        ```yaml
+        {yaml_content}
+        ```
+        
+        Based on this system card, please generate a list of 3-7 specific, actionable tasks that would be appropriate
+        for implementing or improving this project. Each task should have:
+        
+        1. A clear, concise title
+        2. A detailed description explaining what needs to be done
+        3. Any relevant technical requirements or constraints
+        
+        Focus on the most important tasks first, such as core architecture, key features, or critical improvements.
+        Organize the tasks in a logical sequence for implementation.
+        
+        For each task, respond in this exact format (including the JSON structure):
+        
+        TASK: {{
+          "title": "Task title",
+          "description": "Detailed description of what needs to be done"
+        }}
+        """
+        
+        try:
+            response = self.coder.llm.complete(task_prompt, temperature=0.2)
+            
+            # Parse the response to extract tasks
+            import re
+            task_pattern = r'TASK:\s*{\s*"title":\s*"([^"]+)",\s*"description":\s*"([^"]+)"\s*}'
+            tasks = re.findall(task_pattern, response)
+            
+            if not tasks:
+                self.io.tool_warning("Could not parse tasks from the response. Here's the raw response:")
+                self.io.tool_output(response)
                 return
-
-            self.help = Help()
-
-        coder = Coder.create(
-            io=self.io,
-            from_coder=self.coder,
-            edit_format="help",
-            summarize_from_coder=False,
-            map_tokens=512,
-            map_mul_no_files=1,
-        )
-        user_msg = self.help.ask(args)
-        user_msg += """
-# Announcement lines from when this session of aider was launched:
-
-"""
-        user_msg += "\n".join(self.coder.get_announcements()) + "\n"
-
-        coder.run(user_msg, preproc=False)
-
-        if self.coder.repo_map:
-            map_tokens = self.coder.repo_map.max_map_tokens
-            map_mul_no_files = self.coder.repo_map.map_mul_no_files
+            
+            # Create tasks
+            created_tasks = []
+            for title, description in tasks:
+                task = task_manager.create_task(name=title, description=description)
+                created_tasks.append(task)
+                self.io.tool_output(f"Created task: {title}")
+                
+                # Ask if we should generate tests for this task
+                if self.io.confirm_ask(f"Would you like to generate test requirements for '{title}'?"):
+                    self._generate_tests_for_task(task, system_card)
+            
+            # Ask if user wants to switch to a task
+            if created_tasks:
+                self.io.tool_output(f"\nCreated {len(created_tasks)} tasks based on the system card.")
+                if self.io.confirm_ask("Would you like to switch to the first task now?"):
+                    task_manager.switch_task(created_tasks[0].id)
+                    self.io.tool_output(f"Switched to task: {created_tasks[0].name}")
+        except Exception as e:
+            self.io.tool_warning(f"Error creating tasks: {e}")
+            
+    def _generate_tests_for_task(self, task, system_card):
+        """Generate test requirements for a specific task"""
+        self.io.tool_output(f"Generating test requirements for task: {task.name}")
+        
+        # Prepare the prompt for test generation
+        import yaml
+        yaml_content = yaml.dump(system_card, default_flow_style=False, sort_keys=False)
+        
+        test_prompt = f"""
+        I need to generate test requirements for the following task in the context of this project:
+        
+        System Card:
+        ```yaml
+        {yaml_content}
+        ```
+        
+        Task: {task.name}
+        Description: {task.description}
+        
+        Please generate a comprehensive set of test requirements for this task following Test-Driven Development principles. Include:
+        
+        1. Unit tests to verify core functionality
+        2. Edge cases that should be tested
+        3. Integration tests if applicable
+        4. Any specific test tools or frameworks that should be used
+        
+        For each test requirement, provide:
+        - A clear description of what should be tested
+        - Expected inputs and outputs or behaviors
+        - Any special setup or conditions needed
+        
+        Format each test as a JSON object with "name" and "description" fields.
+        """
+        
+        try:
+            response = self.coder.llm.complete(test_prompt, temperature=0.3)
+            
+            # Parse the response to extract tests
+            import re
+            import json
+            
+            # First try to extract JSON objects
+            test_pattern = r'{\s*"name":\s*"([^"]+)",\s*"description":\s*"([^"]+)"\s*}'
+            tests = re.findall(test_pattern, response)
+            
+            if not tests:
+                # If no JSON objects found, look for numbered or bulleted lists
+                line_pattern = r'[\d\*\-]+\.?\s+(.+)'
+                lines = re.findall(line_pattern, response)
+                tests = [(f"Test {i+1}", line) for i, line in enumerate(lines) if line.strip()]
+            
+            if not tests:
+                self.io.tool_warning("Could not parse test requirements. Here's the raw response:")
+                self.io.tool_output(response)
+                return
+            
+            # Initialize test info if needed
+            if not task.test_info:
+                from aider.taskmanager import TestInfo
+                task.test_info = TestInfo(name=task.name, status="pending")
+            
+            # Add tests to task metadata
+            test_requirements = []
+            for name, description in tests:
+                test_requirements.append({"name": name, "description": description})
+                self.io.tool_output(f"- {name}: {description}")
+            
+            # Store test requirements in task metadata
+            if "test_requirements" not in task.metadata:
+                task.metadata["test_requirements"] = test_requirements
+            else:
+                task.metadata["test_requirements"].extend(test_requirements)
+            
+            # Update the task in the task manager
+            task_manager = self._get_task_manager()
+            if task_manager:
+                task_manager.update_task(task)
+                self.io.tool_output(f"\nAdded {len(tests)} test requirements to task '{task.name}'")
+            
+            # Offer to implement the tests
+            if self.io.confirm_ask("Would you like to implement these tests now?"):
+                self._implement_tests_for_task(task)
+                
+        except Exception as e:
+            self.io.tool_warning(f"Error generating test requirements: {e}")
+    
+    def _implement_tests_for_task(self, task):
+        """Implement tests for a task following TDD principles"""
+        self.io.tool_output(f"Implementing tests for task: {task.name}")
+        
+        # Check if we have test requirements
+        if not task.metadata.get("test_requirements"):
+            self.io.tool_warning("No test requirements found for this task.")
+            return
+        
+        # Determine the appropriate test framework based on the project
+        systemcard_path = Path(self.coder.root) / "aider.systemcard.yaml"
+        test_framework = "pytest"  # Default to pytest
+        
+        if systemcard_path.exists():
+            try:
+                import yaml
+                with open(systemcard_path, "r") as f:
+                    system_card = yaml.safe_load(f)
+                
+                # Try to determine the language
+                language = system_card.get("technologies", {}).get("language", "").lower()
+                
+                # Select appropriate test framework based on language
+                if "javascript" in language or "typescript" in language:
+                    test_framework = "jest"
+                elif "java" in language:
+                    test_framework = "junit"
+                elif "c#" in language:
+                    test_framework = "nunit"
+                elif "go" in language:
+                    test_framework = "go test"
+                elif "ruby" in language:
+                    test_framework = "rspec"
+            except Exception:
+                pass
+        
+        # Create a prompt to implement the tests
+        test_requirements = task.metadata.get("test_requirements", [])
+        test_req_text = "\n".join([f"- {test['name']}: {test['description']}" for test in test_requirements])
+        
+        implement_prompt = f"""
+        I need to implement tests for the following task following Test-Driven Development principles:
+        
+        Task: {task.name}
+        Description: {task.description}
+        
+        Test Requirements:
+        {test_req_text}
+        
+        Please implement these tests using {test_framework}. The tests should fail initially (RED phase of TDD),
+        as we haven't implemented the actual functionality yet.
+        
+        For each test:
+        1. Create appropriate test structures
+        2. Set up necessary test fixtures or mocks
+        3. Implement assertions that verify the expected behavior
+        
+        Please provide complete, runnable test code that I can save to a file. Suggest an appropriate 
+        filename and location for these tests based on project conventions.
+        """
+        
+        try:
+            # Get the test implementation
+            self.io.tool_output("Generating test implementation...")
+            response = self.coder.llm.complete(implement_prompt, temperature=0.2)
+            
+            # Extract code blocks
+            import re
+            code_blocks = re.findall(r'```(?:\w+)?\s*([\s\S]+?)```', response)
+            
+            if not code_blocks:
+                self.io.tool_warning("Could not extract code blocks from the response. Here's the raw response:")
+                self.io.tool_output(response)
+                return
+            
+            # Try to extract the suggested filename
+            filename_match = re.search(r'(?:file|filename|save to|create)(?:\s+(?:a|the))?\s*(?:file\s+)?[\'"`]?([^\s\'"`]+)[\'"`]?', response, re.IGNORECASE)
+            suggested_filename = filename_match.group(1) if filename_match else None
+            
+            if not suggested_filename:
+                # Try to guess based on task name
+                import re
+                task_name_snake = re.sub(r'[^\w\s]', '', task.name.lower()).replace(' ', '_')
+                suggested_filename = f"test_{task_name_snake}.py"
+            
+            # Show the tests and ask for confirmation
+            self.io.tool_output(f"\nGenerated test code for {task.name}:")
+            self.io.tool_output("-----------------")
+            self.io.tool_output(code_blocks[0])  # Show the first code block
+            self.io.tool_output("-----------------")
+            
+            if len(code_blocks) > 1:
+                self.io.tool_output(f"Additional {len(code_blocks)-1} code blocks were generated but not shown.")
+            
+            # Ask for confirmation
+            if not self.io.confirm_ask(f"Would you like to save these tests to {suggested_filename}?"):
+                filename = self.io.prompt_ask("Enter a different filename: ")
+                if filename:
+                    suggested_filename = filename
+                else:
+                    self.io.tool_output("Test implementation canceled.")
+                    return
+            
+            # Ensure the tests directory exists
+            test_dir = Path(self.coder.root) / "tests"
+            if not test_dir.exists() and self.io.confirm_ask("Tests directory doesn't exist. Create it?"):
+                test_dir.mkdir(parents=True)
+            
+            # Save the test file
+            test_path = Path(self.coder.root) / suggested_filename
+            with open(test_path, "w") as f:
+                f.write(code_blocks[0])
+            
+            self.io.tool_output(f"Tests saved to {test_path}")
+            
+            # Add the file to the chat
+            self.coder.add_files([str(test_path)])
+            self.io.tool_output(f"Added {suggested_filename} to the chat.")
+            
+            # Update task with the test file
+            task.add_files([str(test_path)])
+            task_manager = self._get_task_manager()
+            if task_manager:
+                task_manager.update_task(task)
+            
+            # Offer to implement the functionality
+            if self.io.confirm_ask("Would you like to implement the functionality to make these tests pass?"):
+                self._implement_functionality_for_tests(task, test_path, code_blocks[0])
+            
+        except Exception as e:
+            self.io.tool_warning(f"Error implementing tests: {e}")
+    
+    def _implement_functionality_for_tests(self, task, test_path, test_code):
+        """Implement the functionality to make the tests pass (TDD GREEN phase)"""
+        self.io.tool_output(f"Implementing functionality for task: {task.name}")
+        
+        # Create a prompt to implement the functionality
+        implement_prompt = f"""
+        I need to implement the functionality to make the following tests pass (GREEN phase of TDD):
+        
+        Task: {task.name}
+        Description: {task.description}
+        
+        Tests:
+        ```
+        {test_code}
+        ```
+        
+        Please implement the necessary code to make these tests pass. Analyze the tests to determine:
+        1. What files need to be created or modified
+        2. What functions/classes/methods need to be implemented
+        3. The expected behavior based on the assertions
+        
+        Provide complete, runnable code for each file that needs to be created or modified.
+        For each file, specify the filename and provide the complete code.
+        """
+        
+        try:
+            # Get the implementation
+            self.io.tool_output("Generating implementation...")
+            response = self.coder.llm.complete(implement_prompt, temperature=0.2)
+            
+            # Extract code blocks with filenames
+            import re
+            
+            # First, try to find blocks with explicit filename indicators
+            file_blocks = re.findall(r'(?:filename|file):\s*[\'"`]?([^\s\'"`]+)[\'"`]?\s*```(?:\w+)?\s*([\s\S]+?)```', response, re.IGNORECASE)
+            
+            # If that doesn't work, look for markdown-style code blocks with filenames as headers
+            if not file_blocks:
+                file_blocks = re.findall(r'#+\s*([^\n]+?\.\w+)\s*```(?:\w+)?\s*([\s\S]+?)```', response)
+            
+            # If still no luck, just get all code blocks and try to infer filenames
+            if not file_blocks:
+                code_blocks = re.findall(r'```(?:\w+)?\s*([\s\S]+?)```', response)
+                if code_blocks:
+                    # Try to guess the filename from the test file
+                    test_filename = Path(test_path).name
+                    if test_filename.startswith("test_"):
+                        impl_filename = test_filename[5:]  # Remove "test_" prefix
+                    else:
+                        impl_filename = "implementation.py"
+                    
+                    file_blocks = [(impl_filename, code_blocks[0])]
+            
+            if not file_blocks:
+                self.io.tool_warning("Could not extract code blocks with filenames. Here's the raw response:")
+                self.io.tool_output(response)
+                return
+            
+            # Process each file
+            for filename, code in file_blocks:
+                self.io.tool_output(f"\nGenerated code for {filename}:")
+                self.io.tool_output("-----------------")
+                self.io.tool_output(code)
+                self.io.tool_output("-----------------")
+                
+                # Ask for confirmation
+                if self.io.confirm_ask(f"Would you like to save this code to {filename}?"):
+                    # Ensure directory exists
+                    file_path = Path(self.coder.root) / filename
+                    file_path.parent.mkdir(parents=True, exist_ok=True)
+                    
+                    # Save the file
+                    with open(file_path, "w") as f:
+                        f.write(code)
+                    
+                    self.io.tool_output(f"Code saved to {file_path}")
+                    
+                    # Add the file to the chat
+                    self.coder.add_files([str(file_path)])
+                    self.io.tool_output(f"Added {filename} to the chat.")
+                    
+                    # Update task with the implemented file
+                    task.add_files([str(file_path)])
+                    task_manager = self._get_task_manager()
+                    if task_manager:
+                        task_manager.update_task(task)
+            
+            # Offer to run the tests
+            if self.io.confirm_ask("Would you like to run the tests to see if they pass?"):
+                self._run_tests_for_task(task, test_path)
+            
+        except Exception as e:
+            self.io.tool_warning(f"Error implementing functionality: {e}")
+    
+    def _run_tests_for_task(self, task, test_path):
+        """Run tests for a task and process the results"""
+        self.io.tool_output(f"Running tests for task: {task.name}")
+        
+        # Determine the test command based on the test file
+        test_file = Path(test_path)
+        test_cmd = None
+        
+        if test_file.suffix == ".py":
+            test_cmd = f"python -m pytest {test_file} -v"
+        elif test_file.suffix == ".js" or test_file.suffix == ".ts":
+            test_cmd = f"npm test -- {test_file}"
+        elif test_file.suffix == ".java":
+            test_cmd = f"mvn test -Dtest={test_file.stem}"
+        elif test_file.suffix == ".go":
+            test_cmd = f"go test {test_file}"
+        elif test_file.suffix == ".rb":
+            test_cmd = f"rspec {test_file}"
+        elif test_file.suffix == ".cs":
+            test_cmd = f"dotnet test --filter {test_file.stem}"
+        
+        if not test_cmd:
+            self.io.tool_warning(f"Could not determine test command for {test_file}")
+            test_cmd = self.io.prompt_ask("Enter the command to run the tests: ")
+            
+            if not test_cmd:
+                self.io.tool_output("Test run canceled.")
+                return
+        
+        # Run the tests
+        self.io.tool_output(f"Running command: {test_cmd}")
+        self.io.tool_output("-----------------")
+        
+        try:
+            from aider.run_cmd import run_cmd
+            exit_code, output = run_cmd(test_cmd, verbose=True)
+            
+            self.io.tool_output("-----------------")
+            
+            # Update task test status
+            if not task.test_info:
+                from aider.taskmanager import TestInfo
+                task.test_info = TestInfo(name=task.name, status="pending")
+            
+            if exit_code == 0:
+                self.io.tool_output("All tests PASSED! (GREEN phase of TDD complete)")
+                task.test_info.status = "passed"
+                
+                # Offer to refactor
+                if self.io.confirm_ask("Would you like to refactor the code? (REFACTOR phase of TDD)"):
+                    self._refactor_code_for_task(task, test_path)
+            else:
+                self.io.tool_output("Some tests FAILED. Let's fix the implementation.")
+                task.test_info.status = "failing"
+                
+                # Extract failing tests
+                import re
+                failing_tests = []
+                
+                if "pytest" in test_cmd:
+                    # Parse pytest output
+                    failures = re.findall(r'(test_\w+).*FAILED', output)
+                    for failure in failures:
+                        failing_tests.append(failure)
+                else:
+                    # Generic extraction (might need improvement)
+                    failures = re.findall(r'(?:FAIL|ERROR|FAILED)(?:ED)?\s*(?::|-)?\s*([^\n:]+)', output)
+                    for failure in failures:
+                        failing_tests.append(failure.strip())
+                
+                if failing_tests:
+                    task.test_info.failing_tests = failing_tests
+                    self.io.tool_output(f"Failing tests: {', '.join(failing_tests)}")
+                
+                # Offer to fix the implementation
+                if self.io.confirm_ask("Would you like me to fix the implementation to make the tests pass?"):
+                    self._fix_implementation_for_failing_tests(task, test_path, output)
+            
+            # Update the task in the task manager
+            task_manager = self._get_task_manager()
+            if task_manager:
+                task_manager.update_task(task)
+            
+        except Exception as e:
+            self.io.tool_warning(f"Error running tests: {e}")
+    
+    def _refactor_code_for_task(self, task, test_path):
+        """Refactor code after tests pass (REFACTOR phase of TDD)"""
+        self.io.tool_output("Refactoring code to improve design, readability, and performance...")
+        
+        # Get the files associated with this task
+        files = task.files
+        if not files:
+            self.io.tool_warning("No files associated with this task to refactor.")
+            return
+        
+        # Filter out test files
+        implementation_files = [f for f in files if "test" not in Path(f).name.lower()]
+        if not implementation_files:
+            self.io.tool_warning("Could not identify implementation files to refactor.")
+            return
+        
+        # Read the content of implementation files
+        file_contents = {}
+        for file_path in implementation_files:
+            try:
+                with open(file_path, "r") as f:
+                    file_contents[file_path] = f.read()
+            except Exception as e:
+                self.io.tool_warning(f"Error reading {file_path}: {e}")
+        
+        # Create a prompt for refactoring
+        files_text = ""
+        for file_path, content in file_contents.items():
+            files_text += f"\nFile: {file_path}\n```\n{content}\n```\n"
+        
+        refactor_prompt = f"""
+        I need to refactor the implementation code for the following task (REFACTOR phase of TDD).
+        The tests are already passing, so we need to maintain the same functionality while improving the code.
+        
+        Task: {task.name}
+        Description: {task.description}
+        
+        Current implementation:
+        {files_text}
+        
+        Please refactor this code to improve:
+        1. Code quality and readability
+        2. Performance and efficiency
+        3. Design patterns and best practices
+        4. Remove duplication
+        5. Simplify complex logic
+        
+        Provide the refactored code for each file that needs changes.
+        For each file, specify the filename and provide the complete refactored code.
+        Explain the key improvements made in your refactoring.
+        """
+        
+        try:
+            # Get the refactored implementation
+            self.io.tool_output("Generating refactored code...")
+            response = self.coder.llm.complete(refactor_prompt, temperature=0.2)
+            
+            # Extract code blocks with filenames
+            import re
+            
+            # Try to find blocks with explicit filename indicators
+            file_blocks = re.findall(r'(?:filename|file):\s*[\'"`]?([^\s\'"`]+)[\'"`]?\s*```(?:\w+)?\s*([\s\S]+?)```', response, re.IGNORECASE)
+            
+            # If that doesn't work, look for markdown-style code blocks with filenames as headers
+            if not file_blocks:
+                file_blocks = re.findall(r'#+\s*([^\n]+?\.\w+)\s*```(?:\w+)?\s*([\s\S]+?)```', response)
+            
+            # If still no luck, just try to match filenames from our implementation files
+            if not file_blocks:
+                code_blocks = re.findall(r'```(?:\w+)?\s*([\s\S]+?)```', response)
+                if code_blocks and implementation_files:
+                    file_blocks = [(Path(implementation_files[0]).name, code_blocks[0])]
+            
+            if not file_blocks:
+                self.io.tool_warning("Could not extract refactored code blocks. Here's the raw response:")
+                self.io.tool_output(response)
+                return
+            
+            # Extract explanation
+            explanation = re.search(r'(?:Key improvements|Improvements|Changes made|Refactoring|Explanation):([\s\S]+?)(?:```|\Z)', response, re.IGNORECASE)
+            if explanation:
+                self.io.tool_output("\nRefactoring Improvements:")
+                self.io.tool_output(explanation.group(1).strip())
+            
+            # Process each file
+            for filename, code in file_blocks:
+                # Match to full path if we have just the filename
+                file_path = next((f for f in implementation_files if Path(f).name == filename), filename)
+                
+                self.io.tool_output(f"\nRefactored code for {file_path}:")
+                self.io.tool_output("-----------------")
+                self.io.tool_output(code)
+                self.io.tool_output("-----------------")
+                
+                # Ask for confirmation
+                if self.io.confirm_ask(f"Would you like to save this refactored code to {file_path}?"):
+                    # Save the file
+                    with open(file_path, "w") as f:
+                        f.write(code)
+                    
+                    self.io.tool_output(f"Refactored code saved to {file_path}")
+            
+            # Offer to run the tests again to confirm refactoring didn't break anything
+            if self.io.confirm_ask("Would you like to run the tests again to confirm the refactoring didn't break anything?"):
+                self._run_tests_for_task(task, test_path)
+            
+        except Exception as e:
+            self.io.tool_warning(f"Error refactoring code: {e}")
+    
+    def _fix_implementation_for_failing_tests(self, task, test_path, test_output):
+        """Fix implementation to make failing tests pass"""
+        self.io.tool_output("Analyzing test failures and fixing implementation...")
+        
+        # Get the files associated with this task
+        files = task.files
+        if not files:
+            self.io.tool_warning("No files associated with this task to fix.")
+            return
+        
+        # Read the content of all files
+        file_contents = {}
+        for file_path in files:
+            try:
+                with open(file_path, "r") as f:
+                    file_contents[file_path] = f.read()
+            except Exception as e:
+                self.io.tool_warning(f"Error reading {file_path}: {e}")
+        
+        # Create a prompt for fixing the implementation
+        files_text = ""
+        for file_path, content in file_contents.items():
+            files_text += f"\nFile: {file_path}\n```\n{content}\n```\n"
+        
+        fix_prompt = f"""
+        I need to fix the implementation code for the following task to make the failing tests pass.
+        
+        Task: {task.name}
+        Description: {task.description}
+        
+        Current files:
+        {files_text}
+        
+        Test output showing failures:
+        ```
+        {test_output}
+        ```
+        
+        Please analyze the test failures and fix the implementation code to make all tests pass.
+        Focus on addressing the specific issues identified in the test output.
+        
+        For each file that needs changes, specify the filename and provide the complete fixed code.
+        Explain the key changes made to fix the issues.
+        """
+        
+        try:
+            # Get the fixed implementation
+            self.io.tool_output("Generating fixed code...")
+            response = self.coder.llm.complete(fix_prompt, temperature=0.3)
+            
+            # Extract code blocks with filenames
+            import re
+            
+            # Try to find blocks with explicit filename indicators
+            file_blocks = re.findall(r'(?:filename|file):\s*[\'"`]?([^\s\'"`]+)[\'"`]?\s*```(?:\w+)?\s*([\s\S]+?)```', response, re.IGNORECASE)
+            
+            # If that doesn't work, look for markdown-style code blocks with filenames as headers
+            if not file_blocks:
+                file_blocks = re.findall(r'#+\s*([^\n]+?\.\w+)\s*```(?:\w+)?\s*([\s\S]+?)```', response)
+            
+            # If still no luck but we have code blocks, try to match with filenames from task
+            if not file_blocks:
+                code_blocks = re.findall(r'```(?:\w+)?\s*([\s\S]+?)```', response)
+                if code_blocks:
+                    # Try to match with non-test files first
+                    impl_files = [f for f in files if "test" not in Path(f).name.lower()]
+                    if impl_files:
+                        file_blocks = [(Path(impl_files[0]).name, code_blocks[0])]
+                    else:
+                        file_blocks = [(Path(files[0]).name, code_blocks[0])]
+            
+            if not file_blocks:
+                self.io.tool_warning("Could not extract fixed code blocks. Here's the raw response:")
+                self.io.tool_output(response)
+                return
+            
+            # Extract explanation
+            explanation = re.search(r'(?:Key changes|Changes made|Fixes|Explanation):([\s\S]+?)(?:```|\Z)', response, re.IGNORECASE)
+            if explanation:
+                self.io.tool_output("\nImplementation Fixes:")
+                self.io.tool_output(explanation.group(1).strip())
+            
+            # Process each file
+            for filename, code in file_blocks:
+                # Match to full path if we have just the filename
+                file_path = next((f for f in files if Path(f).name == filename), filename)
+                
+                self.io.tool_output(f"\nFixed code for {file_path}:")
+                self.io.tool_output("-----------------")
+                self.io.tool_output(code)
+                self.io.tool_output("-----------------")
+                
+                # Ask for confirmation
+                if self.io.confirm_ask(f"Would you like to save this fixed code to {file_path}?"):
+                    # Ensure directory exists
+                    path_obj = Path(file_path)
+                    path_obj.parent.mkdir(parents=True, exist_ok=True)
+                    
+                    # Save the file
+                    with open(file_path, "w") as f:
+                        f.write(code)
+                    
+                    self.io.tool_output(f"Fixed code saved to {file_path}")
+                    
+                    # Add the file to the chat if it's new
+                    if file_path not in files:
+                        self.coder.add_files([str(file_path)])
+                        self.io.tool_output(f"Added {file_path} to the chat.")
+                        
+                        # Update task with the new file
+                        task.add_files([str(file_path)])
+                        task_manager = self._get_task_manager()
+                        if task_manager:
+                            task_manager.update_task(task)
+            
+            # Offer to run the tests again
+            if self.io.confirm_ask("Would you like to run the tests again to see if they pass now?"):
+                self._run_tests_for_task(task, test_path)
+            
+        except Exception as e:
+            self.io.tool_warning(f"Error fixing implementation: {e}")
+            
+    def cmd_autotest(self, args):
+        """Generate and run tests for a task using Test-Driven Development (TDD).
+        
+        This command implements a complete TDD workflow:
+        
+        1. RED phase: Generates and implements tests based on task requirements
+        2. GREEN phase: Implements the functionality to make the tests pass
+        3. REFACTOR phase: Improves the code while keeping tests passing
+        
+        The process is integrated with the system card and task management systems.
+        
+        Usage:
+            /autotest [task_id]
+        
+        If no task_id is provided, the active task will be used.
+        """
+        task_manager = self._get_task_manager()
+        if not task_manager:
+            self.io.tool_error("Task manager not available. Please initialize tasks first.")
+            return
+        
+        active_task = task_manager.get_active_task()
+        if not active_task:
+            self.io.tool_error("No active task. Use /task switch to select a task first.")
+            return
+        
+        # If a specific task ID is provided, use that instead
+        if args.strip():
+            task_id = args.strip()
+            task = task_manager.get_task(task_id)
+            if not task:
+                self.io.tool_error(f"Task {task_id} not found.")
+                return
         else:
-            map_tokens = 0
-            map_mul_no_files = 1
+            task = active_task
+        
+        self.io.tool_output(f"Starting automated TDD workflow for task: {task.name}")
+        
+        # Check if we have a system card
+        systemcard_path = Path(self.coder.root) / "aider.systemcard.yaml"
+        system_card = None
+        
+        if systemcard_path.exists():
+            try:
+                import yaml
+                with open(systemcard_path, "r") as f:
+                    system_card = yaml.safe_load(f)
+            except Exception as e:
+                self.io.tool_warning(f"Could not read system card: {e}")
+        
+        # Generate tests for the task
+        self._generate_tests_for_task(task, system_card or {})
 
-        raise SwitchCoder(
-            edit_format=self.coder.edit_format,
-            summarize_from_coder=False,
-            from_coder=coder,
-            map_tokens=map_tokens,
-            map_mul_no_files=map_mul_no_files,
-            show_announcements=False,
-        )
-
-    def cmd_ask(self, args):
-        """Ask questions about the code base without editing any files. If no prompt provided, switches to ask mode."""  # noqa
-        return self._generic_chat_command(args, "ask")
-
-    def cmd_code(self, args):
-        """Ask for changes to your code. If no prompt provided, switches to code mode."""  # noqa
-        return self._generic_chat_command(args, self.coder.main_model.edit_format)
-
-    def cmd_architect(self, args):
-        """Enter architect/editor mode using 2 different models. If no prompt provided, switches to architect/editor mode."""  # noqa
-        return self._generic_chat_command(args, "architect")
+    def _update_systemcard_from_changes(self, changes):
+        """Update system card based on changes detected in the repository"""
+        systemcard_path = Path(self.coder.root) / "aider.systemcard.yaml"
+        if not systemcard_path.exists():
+            return
+        
+        try:
+            import yaml
+            with open(systemcard_path, "r") as f:
+                system_card = yaml.safe_load(f)
+            
+            # Use the LLM to determine if changes affect the system card
+            files_changed = [change["file"] for change in changes if "file" in change]
+            if not files_changed:
+                return
+                
+            update_prompt = f"""
+            I need to determine if recent changes to these files should update our system card:
+            {', '.join(files_changed)}
+            
+            Current system card:
+            ```yaml
+            {yaml.dump(system_card, default_flow_style=False, sort_keys=False)}
+            ```
+            
+            Should the system card be updated based on these file changes?
+            Answer only YES or NO.
+            """
+            
+            response = self.coder.llm.complete(update_prompt, temperature=0.1)
+            if "YES" in response.upper():
+                self.io.tool_output("The architect has detected that recent changes may affect the system card.")
+                if self.io.confirm_ask("Would you like to update the system card to reflect these changes?"):
+                    self.cmd_systemcard("")
+        except Exception as e:
+            # Silent failure is okay - this is just a helper function
+            pass
 
     def _generic_chat_command(self, args, edit_format):
         if not args.strip():
@@ -1659,26 +1160,6 @@ This is attempt {attempt_count} of {getattr(self.args, 'auto_test_retry_limit', 
             from_coder=coder,
             show_announcements=False,
         )
-
-    def get_help_md(self):
-        "Show help about all commands in markdown"
-
-        res = """
-|Command|Description|
-|:------|:----------|
-"""
-        commands = sorted(self.get_commands())
-        for cmd in commands:
-            cmd_method_name = f"cmd_{cmd[1:]}".replace("-", "_")
-            cmd_method = getattr(self, cmd_method_name, None)
-            if cmd_method:
-                description = cmd_method.__doc__
-                res += f"| **{cmd}** | {description} |\n"
-            else:
-                res += f"| **{cmd}** | |\n"
-
-        res += "\n"
-        return res
 
     def cmd_voice(self, args):
         "Record and transcribe voice input"
