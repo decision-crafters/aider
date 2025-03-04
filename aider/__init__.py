@@ -17,4 +17,10 @@ else:
     except Exception:
         __version__ = safe_version + "+parse"
 
-__all__ = [__version__]
+# Ensure taskmanager module is accessible
+try:
+    from . import taskmanager
+except ImportError:
+    pass
+
+__all__ = [__version__, "taskmanager"]
