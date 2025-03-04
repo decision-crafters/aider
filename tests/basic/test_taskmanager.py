@@ -60,7 +60,10 @@ class TaskTest(unittest.TestCase):
         self.assertIsInstance(env.working_directory, str)
 
     def test_test_info(self):
-        test_info = TestInfo()
+        test_info = TestInfo(
+            name="test1",
+            status="pending"
+        )
         self.assertEqual(len(test_info.failing_tests), 0)
         self.assertEqual(len(test_info.failure_counts), 0)
         self.assertEqual(len(test_info.attempted_solutions), 0)
