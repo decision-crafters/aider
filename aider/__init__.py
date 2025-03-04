@@ -17,12 +17,9 @@ else:
     except Exception:
         __version__ = safe_version + "+parse"
 
-# Ensure taskmanager module is accessible
-try:
-    from . import taskmanager
-except ImportError:
-    pass
+# Make sure taskmanager is imported and accessible
+# This ensures its classes are available for import from aider.taskmanager
+from . import taskmanager
 
-from .taskmanager import Task, Environment, TestInfo, TaskManager, get_task_manager
-
-__all__ = [__version__, "taskmanager", 'Task', 'Environment', 'TestInfo', 'TaskManager', 'get_task_manager']
+# Explicitly make these available at the package level
+__all__ = ['__version__']
