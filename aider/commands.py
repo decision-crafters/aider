@@ -223,6 +223,9 @@ class Commands:
             cmd = attr[4:]
             cmd = cmd.replace("_", "-")
             commands.append("/" + cmd)
+            
+        # Add systemcard command 
+        commands.append("/systemcard")
 
         return commands
 
@@ -231,6 +234,9 @@ class Commands:
         cmd_method_name = f"cmd_{cmd_name}"
         cmd_method = getattr(self, cmd_method_name, None)
         if not cmd_method:
+            # Handle special case for systemcard command
+            if cmd_name == "systemcard":
+                return self.cmd_systemcard(args)
             self.io.tool_output(f"Error: Command {cmd_name} not found.")
             return
 
@@ -238,6 +244,146 @@ class Commands:
             return cmd_method(args)
         except ANY_GIT_ERROR as err:
             self.io.tool_error(f"Unable to complete {cmd_name}: {err}")
+            
+    def cmd_systemcard(self, args):
+        "Create or update the project system card for better context awareness"
+        
+        # Path for storing the system card
+        systemcard_path = Path(self.coder.root) / "aider.systemcard.yaml"
+        
+        # Start the interactive process
+        self.io.tool_output("Let's create a system card for your project!")
+        self.io.tool_output("This will help me understand your project better.")
+        
+        # Check if we already have a system card
+        if systemcard_path.exists():
+            self.io.tool_output(f"Found existing system card at {systemcard_path}")
+            with open(systemcard_path, "r") as f:
+                current_content = f.read()
+                self.io.tool_output("\nCurrent System Card:")
+                self.io.tool_output("-----------------")
+                self.io.tool_output(current_content)
+                self.io.tool_output("-----------------")
+            
+            if not self.io.confirm_ask("Would you like to update this system card?"):
+                self.io.tool_output("System card will remain unchanged.")
+                return
+                
+        # Initialize the system card structure
+        system_card = {
+            "project": {},
+            "technologies": {},
+            "requirements": {
+                "functional": [],
+                "non_functional": []
+            },
+            "deployment": {},
+            "project_structure": {}
+        }
+        
+        # Analyze environment if possible
+        try:
+            import platform
+            system_card["technologies"]["os"] = platform.system()
+            system_card["technologies"]["python"] = platform.python_version()
+            
+            # Check if Docker is installed
+            exit_code, _ = run_cmd("docker --version", verbose=False, error_print=lambda x: None)
+            system_card["technologies"]["docker"] = exit_code == 0
+            
+            # Check for git
+            if self.coder.repo:
+                system_card["technologies"]["git"] = True
+                try:
+                    system_card["project"]["name"] = Path(self.coder.root).name
+                except:
+                    pass
+            
+            # Look for common files
+            for file in ["requirements.txt", "pyproject.toml", "package.json", "Dockerfile"]:
+                file_path = Path(self.coder.root) / file
+                if file_path.exists():
+                    system_card["technologies"][file] = True
+        except Exception as e:
+            self.io.tool_warning(f"Error during environment analysis: {e}")
+        
+        # Get interactive input
+        self.io.tool_output("\nLet's get some basic information about your project:")
+        
+        # Project info
+        name = self.io.input_ask("Project name: ") or system_card["project"].get("name", "")
+        description = self.io.input_ask("Project description: ")
+        system_card["project"]["name"] = name
+        system_card["project"]["description"] = description
+        
+        # Technologies
+        language = self.io.input_ask("Primary programming language: ") or system_card["technologies"].get("python", "Python")
+        framework = self.io.input_ask("Framework(s): ")
+        database = self.io.input_ask("Database(s): ")
+        
+        system_card["technologies"]["language"] = language
+        if framework:
+            system_card["technologies"]["framework"] = framework
+        if database:
+            system_card["technologies"]["database"] = database
+        
+        # Architecture
+        architecture = self.io.input_ask("Architecture pattern (e.g., MVC, Microservices): ")
+        if architecture:
+            system_card["project"]["architecture"] = architecture
+            
+        # Get some requirements
+        self.io.tool_output("\nList some key requirements (leave blank to finish):")
+        i = 1
+        while True:
+            req = self.io.input_ask(f"Functional requirement {i}: ")
+            if not req:
+                break
+            system_card["requirements"]["functional"].append(req)
+            i += 1
+            
+        i = 1
+        while True:
+            req = self.io.input_ask(f"Non-functional requirement {i}: ")
+            if not req:
+                break
+            system_card["requirements"]["non_functional"].append(req)
+            i += 1
+            
+        # Format the system card as YAML
+        try:
+            import yaml
+            yaml_content = yaml.dump(system_card, default_flow_style=False, sort_keys=False)
+            
+            # Write to file
+            with open(systemcard_path, "w") as f:
+                f.write(yaml_content)
+                
+            self.io.tool_output(f"\nSystem card created successfully at {systemcard_path}")
+            self.io.tool_output("\nSystem Card Contents:")
+            self.io.tool_output("-----------------")
+            self.io.tool_output(yaml_content)
+            self.io.tool_output("-----------------")
+            
+            # Add to git if desired
+            if self.coder.repo and self.io.confirm_ask("Would you like to add the system card to git?"):
+                try:
+                    self.coder.repo.add_to_repo(str(systemcard_path))
+                    self.io.tool_output("System card added to git repository.")
+                except:
+                    self.io.tool_error("Failed to add system card to git repository.")
+            
+            # Suggest next steps
+            self.io.tool_output("\nYou can edit this file directly or run /systemcard again to update it.")
+            self.io.tool_output("I'll use this information to provide more context-aware assistance with your project.")
+            
+        except ImportError:
+            self.io.tool_error("PyYAML is required for system card creation. Please install it with: pip install pyyaml")
+            
+        except Exception as e:
+            self.io.tool_error(f"Error creating system card: {e}")
+            
+        return
 
     def matching_commands(self, inp):
         words = inp.strip().split()
@@ -2037,6 +2183,35 @@ This is attempt {attempt_count} of {getattr(self.args, 'auto_test_retry_limit', 
             ])
             task.add_conversation_context(chat_context)
         
+        # Associate system card with the task if available
+        systemcard_path = Path(self.coder.root) / "aider.systemcard.yaml"
+        if systemcard_path.exists():
+            try:
+                import yaml
+                with open(systemcard_path, "r") as f:
+                    system_card = yaml.safe_load(f)
+                    
+                # Store system card context in task metadata
+                task.metadata["system_card"] = system_card
+                
+                # Check if task aligns with requirements
+                if "requirements" in system_card and description:
+                    matched_requirements = []
+                    for req_type, reqs in system_card["requirements"].items():
+                        for req in reqs:
+                            # Simple keyword matching - could be more sophisticated
+                            if any(keyword.lower() in description.lower() 
+                                   for keyword in req.lower().split()):
+                                matched_requirements.append(req)
+                    
+                    if matched_requirements:
+                        task.metadata["matched_requirements"] = matched_requirements
+                        self.io.tool_output(f"Task matches these requirements from the system card:")
+                        for req in matched_requirements:
+                            self.io.tool_output(f"- {req}")
+            except Exception as e:
+                self.io.tool_warning(f"Could not associate system card with task: {e}")
+        
         # Switch to the new task
         task_manager.switch_task(task.id)
         
@@ -2236,6 +2411,29 @@ This is attempt {attempt_count} of {getattr(self.args, 'auto_test_retry_limit', 
         self.io.tool_output(f"\nEnvironment: {task.environment.os}, Python {task.environment.python_version.split()[0]}")
         if task.environment.git_branch:
             self.io.tool_output(f"Git branch: {task.environment.git_branch}")
+            
+        # Show system card information if available
+        if task.metadata and "system_card" in task.metadata:
+            system_card = task.metadata["system_card"]
+            self.io.tool_output("\nSystem Card Info:")
+            
+            # Show matched requirements if any
+            if "matched_requirements" in task.metadata:
+                matched_reqs = task.metadata["matched_requirements"]
+                self.io.tool_output("Matched Requirements:")
+                for req in matched_reqs:
+                    self.io.tool_output(f"  - {req}")
+            
+            # Show architecture if defined
+            if "project" in system_card and "architecture" in system_card["project"]:
+                self.io.tool_output(f"Architecture: {system_card['project']['architecture']}")
+                
+            # Show technologies
+            if "technologies" in system_card:
+                techs = ", ".join(f"{k}: {v}" for k, v in system_card["technologies"].items() 
+                                  if k not in ["os", "python"])
+                if techs:
+                    self.io.tool_output(f"Technologies: {techs}")
 
     def cmd_copy_context(self, args=None):
         """Copy the current chat context as markdown, suitable to paste into a web UI"""

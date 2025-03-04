@@ -739,8 +739,63 @@ class Coder:
 
         return repo_content
 
+    def get_system_card(self):
+        """Get the system card for the project if it exists"""
+        systemcard_path = Path(self.root) / "aider.systemcard.yaml"
+        if systemcard_path.exists():
+            try:
+                import yaml
+                with open(systemcard_path, "r") as f:
+                    return yaml.safe_load(f)
+            except Exception as e:
+                # Fall back gracefully if there's an error
+                return None
+        return None
+    
     def get_repo_messages(self):
         repo_messages = []
+        
+        # Add system card information if available
+        system_card = self.get_system_card()
+        if system_card:
+            system_card_content = "# Project System Card\n\n"
+            
+            # Format project info
+            if "project" in system_card:
+                project = system_card["project"]
+                system_card_content += "## Project Information\n"
+                for key, value in project.items():
+                    system_card_content += f"- {key}: {value}\n"
+                    
+            # Format technologies
+            if "technologies" in system_card:
+                technologies = system_card["technologies"]
+                system_card_content += "\n## Technologies\n"
+                for key, value in technologies.items():
+                    system_card_content += f"- {key}: {value}\n"
+                    
+            # Format requirements
+            if "requirements" in system_card:
+                requirements = system_card["requirements"]
+                system_card_content += "\n## Requirements\n"
+                
+                if "functional" in requirements and requirements["functional"]:
+                    system_card_content += "\nFunctional Requirements:\n"
+                    for req in requirements["functional"]:
+                        system_card_content += f"- {req}\n"
+                        
+                if "non_functional" in requirements and requirements["non_functional"]:
+                    system_card_content += "\nNon-Functional Requirements:\n"
+                    for req in requirements["non_functional"]:
+                        system_card_content += f"- {req}\n"
+            
+            # Add formatted system card content to messages
+            repo_messages += [
+                dict(role="user", content=system_card_content),
+                dict(role="assistant", content="I'll keep these project details in mind when helping you."),
+            ]
+        
+        # Add repository content
         repo_content = self.get_repo_map()
         if repo_content:
             repo_messages += [
@@ -915,6 +970,21 @@ class Coder:
 
     def run_one(self, user_message, preproc):
         self.init_before_message()
+        
+        # Check if there's an active task with system card info
+        if hasattr(self, 'active_task') and self.active_task and \
+           hasattr(self.active_task, 'metadata') and \
+           'system_card' in self.active_task.metadata and \
+           'matched_requirements' in self.active_task.metadata:
+            # Add a hint about task requirements from system card
+            requirements = self.active_task.metadata['matched_requirements']
+            if requirements:
+                req_info = "\n".join([f"- {req}" for req in requirements])
+                hint = f"""
+Note: This task should satisfy these requirements from the project system card:
+{req_info}
+"""
+                user_message = user_message + "\n\n" + hint
 
         if preproc:
             message = self.preproc_user_input(user_message)
