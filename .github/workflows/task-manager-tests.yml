@@ -6,10 +6,12 @@ on:
       - 'aider/taskmanager.py'
       - 'tests/basic/test_taskmanager.py'
       - 'tests/basic/test_task_integration.py'
+      - 'tests/basic/test_systemcard.py'
       - 'aider/coders/ask_coder.py'
       - 'aider/coders/ask_prompts.py'
       - 'aider/coders/architect_coder.py'
       - 'aider/coders/architect_prompts.py'
+      - 'aider/coders/base_coder.py'
       - '.github/workflows/task-manager-tests.yml'
     branches:
       - main
@@ -18,10 +20,12 @@ on:
       - 'aider/taskmanager.py'
       - 'tests/basic/test_taskmanager.py'
       - 'tests/basic/test_task_integration.py'
+      - 'tests/basic/test_systemcard.py'
       - 'aider/coders/ask_coder.py'
       - 'aider/coders/ask_prompts.py'
       - 'aider/coders/architect_coder.py'
       - 'aider/coders/architect_prompts.py'
+      - 'aider/coders/base_coder.py'
       - '.github/workflows/task-manager-tests.yml'
     branches:
       - main
@@ -59,7 +63,7 @@ jobs:
       env:
         AIDER_ANALYTICS: false
       run: |
-        pytest tests/basic/test_taskmanager.py tests/basic/test_task_integration.py -v --cov=aider.taskmanager --cov=aider.coders
+        pytest tests/basic/test_taskmanager.py tests/basic/test_task_integration.py tests/basic/test_systemcard.py -v --cov=aider.taskmanager --cov=aider.coders --cov=aider.commands
 
     - name: Run dev task test script
       env:
@@ -73,3 +77,4 @@ jobs:
         python -c "from aider.taskmanager import get_task_manager; tm = get_task_manager(); print('Task manager initialization successful')"
         python -c "from aider.coders.ask_coder import AskCoder; from aider.io import InputOutput; coder = AskCoder(io=InputOutput(), show_timings=False); print('AskCoder initialization successful')"
         python -c "from aider.coders.architect_coder import ArchitectCoder; from aider.io import InputOutput; coder = ArchitectCoder(io=InputOutput(), show_timings=False); print('ArchitectCoder initialization successful')"
+        python -c "from aider.commands import Commands; from aider.io import InputOutput; cmds = Commands(io=InputOutput()); '/systemcard' in cmds.get_commands() and print('System card command available')"
