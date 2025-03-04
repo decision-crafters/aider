@@ -698,43 +698,11 @@ class Coder:
 
         return matches
 
-    def get_repo_map(self, force_refresh=False):
-        if not self.repo_map:
-            return
-
-        cur_msg_text = self.get_cur_message_text()
-        mentioned_fnames = self.get_file_mentions(cur_msg_text)
-        mentioned_idents = self.get_ident_mentions(cur_msg_text)
-
-        mentioned_fnames.update(self.get_ident_filename_matches(mentioned_idents))
-
-        all_abs_files = set(self.get_all_abs_files())
-        repo_abs_read_only_fnames = set(self.abs_read_only_fnames) & all_abs_files
-        chat_files = set(self.abs_fnames) | repo_abs_read_only_fnames
-        other_files = all_abs_files - chat_files
-
-        repo_content = self.repo_map.get_repo_map(
-            chat_files,
-            other_files,
-            mentioned_fnames=mentioned_fnames,
-            mentioned_idents=mentioned_idents,
-            force_refresh=force_refresh,
-        )
-
-        # fall back to global repo map if files in chat are disjoint from rest of repo
-        if not repo_content:
-            repo_content = self.repo_map.get_repo_map(
-                set(),
-                all_abs_files,
-                mentioned_fnames=mentioned_fnames,
-                mentioned_idents=mentioned_idents,
-            )
-
-        # fall back to completely unhinted repo
-        if not repo_content:
-            repo_content = self.repo_map.get_repo_map(
-                set(),
-                all_abs_files,
+    def get_repo_map(self):
+        repo_content = self.io.repo_map_content(self.repo_map)
+        if self.repo_map and not repo_content:
+            self.io.tool_error(
+                "Failed to get repository map. Try using /map-refresh to refresh it."
             )
 
         return repo_content
@@ -801,10 +769,10 @@ class Coder:
             repo_messages += [
                 dict(role="user", content=repo_content),
                 dict(
-                    role="assistant",
-                    content="Ok, I won't try and edit those files without asking first.",
+                    role="assistant", content="I'll keep this repository structure in mind."
                 ),
             ]
+
         return repo_messages
 
     def get_readonly_files_messages(self):
