@@ -23,6 +23,8 @@ class SystemCardCommandTest(unittest.TestCase):
         
         # Mock IO
         self.io = MagicMock(spec=InputOutput)
+        # Add mock method for input_ask that wasn't in the spec
+        self.io.input_ask = MagicMock()
         
         # Create commands instance
         self.commands = Commands(
@@ -38,12 +40,12 @@ class SystemCardCommandTest(unittest.TestCase):
         commands = self.commands.get_commands()
         self.assertIn("/systemcard", commands)
         
-    @patch('aider.io.InputOutput.input_ask')
+    @patch('aider.io.InputOutput.prompt_ask')
     @patch('aider.io.InputOutput.confirm_ask')
-    def test_systemcard_create(self, mock_confirm_ask, mock_input_ask):
+    def test_systemcard_create(self, mock_confirm_ask, mock_prompt_ask):
         """Test creating a system card"""
         # Set up mock input responses
-        mock_input_ask.side_effect = [
+        mock_prompt_ask.side_effect = [
             "Test Project",                  # Project name
             "A test project description",    # Project description
             "Python",                        # Language
@@ -59,7 +61,7 @@ class SystemCardCommandTest(unittest.TestCase):
         mock_confirm_ask.return_value = False  # Don't add to git
         
         # Call systemcard command
-        with patch('aider.commands.yaml.dump'):
+        with patch('yaml.dump'):
             with patch('builtins.open', create=True) as mock_open:
                 # Mock file operations
                 mock_file = MagicMock()
@@ -74,7 +76,7 @@ class SystemCardCommandTest(unittest.TestCase):
                 # Check function was called with expected arguments
                 # Since we can't check the content of the systemcard (it was mocked),
                 # we at least check that our input was processed correctly
-                self.assertEqual(mock_input_ask.call_count, 11)
+                self.assertEqual(mock_prompt_ask.call_count, 11)
                 mock_confirm_ask.assert_called_once()
 
     def test_get_system_card(self):
