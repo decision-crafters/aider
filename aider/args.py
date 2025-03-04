@@ -848,6 +848,16 @@ def get_parser(default_config_files, git_root):
         default=False,
     )
 
+    ##########
+    group = parser.add_argument_group("Debug options")
+    group.add_argument(
+        "--show-debug", action="store_true", help="Enable debugging output (disabled by default)", dest="show_debug"
+    )
+    group.add_argument(
+        "--no-debug", action="store_false", help="Disable debugging output (default behavior)", dest="show_debug"
+    )
+    group.set_defaults(show_debug=None)
+
     return parser
 
 

@@ -451,9 +451,56 @@ def sanity_check_repo(repo, io):
     return False
 
 
+def configure_logging(debug_level="WARNING"):
+    """
+    Configure logging for the application with the specified debug level
+    
+    Args:
+        debug_level (str): Logging level - DEBUG, INFO, WARNING, ERROR, CRITICAL
+    """
+    import logging
+    
+    # Map string level to logging level
+    level_map = {
+        "DEBUG": logging.DEBUG,
+        "INFO": logging.INFO,
+        "WARNING": logging.WARNING,
+        "ERROR": logging.ERROR,
+        "CRITICAL": logging.CRITICAL
+    }
+    
+    level = level_map.get(debug_level.upper(), logging.WARNING)
+    
+    # Set up basic logging
+    logging.basicConfig(level=level)
+    
+    # Configure specific loggers
+    loggers = {
+        'git': logging.WARNING,
+        'git.cmd': logging.WARNING,
+        'git.util': logging.WARNING,
+        'httpcore': logging.WARNING,
+        'httpx': logging.WARNING,
+        'LiteLLM': logging.WARNING,
+        'asyncio': logging.WARNING,
+    }
+    
+    # If in DEBUG mode, allow debug logs from aider itself but keep others at WARNING
+    if level == logging.DEBUG:
+        for logger_name in loggers:
+            logging.getLogger(logger_name).setLevel(logging.WARNING)
+    else:
+        # Otherwise set all specified loggers to WARNING or higher
+        for logger_name, logger_level in loggers.items():
+            logging.getLogger(logger_name).setLevel(logger_level)
+
+
 def main(argv=None, input=None, output=None, force_git_root=None, return_coder=False):
     report_uncaught_exceptions()
 
+    # Configure logging early in the process with default level (WARNING)
+    configure_logging()
+    
     if argv is None:
         argv = sys.argv[1:]
 
@@ -482,6 +529,13 @@ def main(argv=None, input=None, output=None, force_git_root=None, return_coder=F
     parser = get_parser(default_config_files, git_root)
     try:
         args, unknown = parser.parse_known_args(argv)
+        
+        # Configure logging level based on args
+        if args.show_debug is not None:
+            if args.show_debug:
+                configure_logging("DEBUG")
+            else:
+                configure_logging("WARNING")
     except AttributeError as e:
         if all(word in str(e) for word in ["bool", "object", "has", "no", "attribute", "strip"]):
             if check_config_files_for_yes(default_config_files):

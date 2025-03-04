@@ -26,13 +26,25 @@ class Environment:
         """Create an Environment instance with current system info"""
         import os
         import sys
-        import pkg_resources
-        
-        # Try to get aider version, default to "0.0.0" if not found
+        # Replace pkg_resources with importlib.metadata which is standard in Python 3.8+
         try:
-            aider_version = pkg_resources.get_distribution("aider").version
-        except pkg_resources.DistributionNotFound:
-            aider_version = "0.0.0"
+            from importlib.metadata import version, PackageNotFoundError
+            
+            # Try to get aider version, default to "0.0.0" if not found
+            try:
+                aider_version = version("aider")
+            except PackageNotFoundError:
+                aider_version = "0.0.0"
+        except ImportError:
+            # Fallback for Python < 3.8
+            try:
+                import pkg_resources
+                try:
+                    aider_version = pkg_resources.get_distribution("aider").version
+                except pkg_resources.DistributionNotFound:
+                    aider_version = "0.0.0"
+            except ImportError:
+                aider_version = "0.0.0"
             
         return cls(
             os=os.name,
@@ -71,6 +83,32 @@ class Task:
     ))
     test_info: Optional[TestInfo] = None
     metadata: Dict = field(default_factory=dict)
+    
+    def __init__(self, id, name, description, created_at=None, updated_at=None, 
+                status="active", parent_id=None, parent_task_id=None, files=None, 
+                conversation_context="", environment=None, test_info=None, metadata=None, **kwargs):
+        """Initialize a Task with support for both parent_id and parent_task_id"""
+        self.id = id
+        self.name = name
+        self.description = description
+        self.created_at = created_at or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        self.updated_at = updated_at or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        self.status = status
+        # Handle parent_task_id for backward compatibility
+        self.parent_id = parent_task_id if parent_id is None else parent_id
+        self.files = files or []
+        self.conversation_context = conversation_context
+        self.environment = environment or Environment(
+            os=os.name,
+            python_version=".".join(map(str, __import__("sys").version_info[:3])),
+            aider_version="0.0.0"
+        )
+        self.test_info = test_info
+        self.metadata = metadata or {}
+        
+        # Handle any additional fields passed as kwargs
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
     def add_files(self, files):
         """Add files to the task"""
@@ -114,12 +152,22 @@ class Task:
         """Get list of tags for this task"""
         return self.metadata.get("tags", [])
         
+    @tags.setter
+    def tags(self, value):
+        """Set list of tags for this task"""
+        self.metadata["tags"] = value
+        
     @property
     def subtask_ids(self):
         """Get list of subtask IDs for this task"""
         if not hasattr(self, '_subtask_ids'):
             self._subtask_ids = []
         return self._subtask_ids
+        
+    @subtask_ids.setter
+    def subtask_ids(self, value):
+        """Set list of subtask IDs for this task"""
+        self._subtask_ids = value
         
     def to_dict(self):
         """Convert task to dictionary for serialization"""
@@ -130,6 +178,10 @@ class Task:
     @classmethod
     def from_dict(cls, data):
         """Create a Task instance from a dictionary"""
+        # Handle backward compatibility for parent_task_id
+        if "parent_task_id" in data and data["parent_task_id"] is not None:
+            data["parent_id"] = data.pop("parent_task_id")
+        
         # Handle nested dataclass objects
         if "environment" in data and data["environment"]:
             data["environment"] = Environment(**data["environment"])
