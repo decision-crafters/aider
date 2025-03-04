@@ -23,4 +23,6 @@ try:
 except ImportError:
     pass
 
-__all__ = [__version__, "taskmanager"]
+from .taskmanager import Task, Environment, TestInfo, TaskManager, get_task_manager
+
+__all__ = [__version__, "taskmanager", 'Task', 'Environment', 'TestInfo', 'TaskManager', 'get_task_manager']

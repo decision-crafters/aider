@@ -26,6 +26,8 @@ class Environment:
     git_repo: str = ""
     working_directory: str = ""
     dependencies: Dict[str, str] = field(default_factory=dict)
+    variables: Dict[str, Any] = field(default_factory=dict)
+    context: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def capture_current(cls):
@@ -47,6 +49,9 @@ class TestInfo:
     failure_counts: Dict[str, int] = field(default_factory=dict)
     threshold: int = 3  # Default threshold for failures before assistance
     attempted_solutions: List[Dict[str, Any]] = field(default_factory=list)
+    name: str
+    status: str
+    message: Optional[str] = None
 
 
 @dataclass
@@ -68,6 +73,7 @@ class Task:
     tags: List[str] = field(default_factory=list)
     test_info: Optional[TestInfo] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    tests: List[TestInfo] = field(default_factory=list)
 
     def update(self):
         """Update the task's updated_at timestamp."""
@@ -166,6 +172,7 @@ class TaskManager:
         self.storage_dir.mkdir(parents=True, exist_ok=True)
         self.tasks = {}
         self.active_task_id = None
+        self.current_environment = Environment(variables={}, context={})
         self._load_tasks()
 
     def _load_tasks(self):
@@ -299,7 +306,7 @@ class TaskManager:
         if task_id in self.tasks:
             task = self.tasks[task_id]
             if task.test_info is None:
-                task.test_info = TestInfo()
+                task.test_info = TestInfo(name=test_name, status="failed")
 
             if test_name not in task.test_info.failing_tests:
                 task.test_info.failing_tests.append(test_name)
@@ -333,7 +340,7 @@ class TaskManager:
         if task_id in self.tasks:
             task = self.tasks[task_id]
             if task.test_info is None:
-                task.test_info = TestInfo()
+                task.test_info = TestInfo(name=test_name, status="failed")
 
             solution_entry = {
                 "test_name": test_name,
@@ -358,6 +365,11 @@ class TaskManager:
                 ]
             return task.test_info.attempted_solutions
         return []
+
+    def update_environment(self, variables: Dict[str, Any], context: Dict[str, Any]):
+        """Update the current environment variables and context."""
+        self.current_environment.variables.update(variables)
+        self.current_environment.context.update(context)
 
 
 # Task manager singleton instance
