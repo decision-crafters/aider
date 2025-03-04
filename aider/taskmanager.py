@@ -19,6 +19,27 @@ class Environment:
     os: str
     python_version: str
     aider_version: str = ""
+    working_directory: str = ""
+    
+    @classmethod
+    def capture_current(cls):
+        """Create an Environment instance with current system info"""
+        import os
+        import sys
+        import pkg_resources
+        
+        # Try to get aider version, default to "0.0.0" if not found
+        try:
+            aider_version = pkg_resources.get_distribution("aider").version
+        except pkg_resources.DistributionNotFound:
+            aider_version = "0.0.0"
+            
+        return cls(
+            os=os.name,
+            python_version=".".join(map(str, sys.version_info[:3])),
+            aider_version=aider_version,
+            working_directory=os.getcwd()
+        )
 
 
 @dataclass
@@ -26,6 +47,10 @@ class TestInfo:
     failing_tests: List[str] = field(default_factory=list)
     failure_counts: Dict[str, int] = field(default_factory=dict)
     attempt_count: int = 0
+    attempted_solutions: List[str] = field(default_factory=list)
+    name: Optional[str] = None
+    status: str = "pending"
+    threshold: int = 3
 
 
 @dataclass
@@ -56,6 +81,62 @@ class Task:
     def add_conversation_context(self, context):
         """Add conversation context to the task"""
         self.conversation_context = context
+        
+    def complete(self):
+        """Mark the task as completed"""
+        self.status = "completed"
+        self.updated_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        
+    def archive(self):
+        """Mark the task as archived"""
+        self.status = "archived"
+        self.updated_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        
+    def reactivate(self):
+        """Mark the task as active"""
+        self.status = "active"
+        self.updated_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        
+    def add_tag(self, tag):
+        """Add a tag to the task metadata"""
+        if "tags" not in self.metadata:
+            self.metadata["tags"] = []
+        if tag not in self.metadata["tags"]:
+            self.metadata["tags"].append(tag)
+
+    @property
+    def parent_task_id(self):
+        """Alias for parent_id to maintain backward compatibility"""
+        return self.parent_id
+        
+    @property
+    def tags(self):
+        """Get list of tags for this task"""
+        return self.metadata.get("tags", [])
+        
+    @property
+    def subtask_ids(self):
+        """Get list of subtask IDs for this task"""
+        if not hasattr(self, '_subtask_ids'):
+            self._subtask_ids = []
+        return self._subtask_ids
+        
+    def to_dict(self):
+        """Convert task to dictionary for serialization"""
+        # Use asdict from dataclasses to convert to dict
+        task_dict = asdict(self)
+        return task_dict
+        
+    @classmethod
+    def from_dict(cls, data):
+        """Create a Task instance from a dictionary"""
+        # Handle nested dataclass objects
+        if "environment" in data and data["environment"]:
+            data["environment"] = Environment(**data["environment"])
+        if "test_info" in data and data["test_info"]:
+            data["test_info"] = TestInfo(**data["test_info"])
+        
+        return cls(**data)
 
 
 class TaskManager:
@@ -122,6 +203,15 @@ class TaskManager:
         )
         
         self.tasks[task_id] = task
+        
+        # If this is a subtask, add it to the parent's subtask_ids
+        if parent_id and parent_id in self.tasks:
+            parent_task = self.tasks[parent_id]
+            if not hasattr(parent_task, '_subtask_ids'):
+                parent_task._subtask_ids = []
+            parent_task._subtask_ids.append(task_id)
+            self._save_task(parent_task)
+        
         self._save_task(task)
         
         # Set as active task if there's no active task
@@ -146,9 +236,10 @@ class TaskManager:
         return self.tasks.get(task_id)
 
     def get_task_by_name(self, name: str) -> Optional[Task]:
-        """Get a task by name"""
+        """Get a task by name (case-insensitive)"""
+        name_lower = name.lower()
         for task in self.tasks.values():
-            if task.name == name:
+            if task.name.lower() == name_lower:
                 return task
         return None
 
@@ -213,23 +304,128 @@ class TaskManager:
         return task
 
     def reactivate_task(self, task_id: str):
-        """Reactivate a completed or archived task"""
-        if task_id not in self.tasks:
-            raise ValueError(f"Task {task_id} not found")
-            
-        task = self.tasks[task_id]
-        task.status = "active"
-        task.updated_at = time.strftime("%Y-%m-%d %H:%M:%S")
-        self._save_task(task)
-        
+        """Reactivate an archived task"""
+        task = self.get_task(task_id)
+        if task:
+            task.reactivate()
+            self._save_task(task)
         return task
 
     def list_tasks(self, status: Optional[str] = None) -> List[Task]:
-        """List tasks, optionally filtered by status"""
+        """List all tasks, optionally filtered by status"""
         if status:
             return [task for task in self.tasks.values() if task.status == status]
-        else:
-            return list(self.tasks.values())
+        return list(self.tasks.values())
+    
+    def get_subtasks(self, task_id: str) -> List[Task]:
+        """Get all subtasks for a given task
+        
+        Args:
+            task_id: The ID of the parent task
+            
+        Returns:
+            List of subtask Task objects
+        """
+        parent_task = self.get_task(task_id)
+        if not parent_task:
+            return []
+            
+        return [self.tasks[subtask_id] for subtask_id in parent_task.subtask_ids 
+                if subtask_id in self.tasks]
+    
+    def delete_task(self, task_id: str):
+        """Delete a task"""
+        if task_id in self.tasks:
+            del self.tasks[task_id]
+            # Remove task file if it exists
+            task_file = Path(self.storage_dir) / f"{task_id}.json"
+            if task_file.exists():
+                task_file.unlink()
+                
+    def add_test_failure(self, task_id: str, test_name: str):
+        """Record a test failure for a task
+        
+        Returns True if the failure count has reached a threshold
+        """
+        task = self.get_task(task_id)
+        if not task:
+            return False
+            
+        # Initialize test_info if not already done
+        if not task.test_info:
+            task.test_info = TestInfo()
+            
+        # Add failing test if not already in the list
+        if test_name not in task.test_info.failing_tests:
+            task.test_info.failing_tests.append(test_name)
+            
+        # Increment failure count
+        count = task.test_info.failure_counts.get(test_name, 0) + 1
+        task.test_info.failure_counts[test_name] = count
+        
+        # Increment attempt count
+        task.test_info.attempt_count += 1
+        
+        # Save the task
+        self._save_task(task)
+        
+        # Return True if failure threshold reached (3 failures)
+        return count >= 3
+        
+    def reset_test_failures(self, task_id: str, test_name: str):
+        """Reset the failure count for a specific test in a task
+        
+        Args:
+            task_id: The ID of the task to reset failures for
+            test_name: The name of the test to reset
+            
+        Returns:
+            The updated task or None if the task doesn't exist
+        """
+        task = self.get_task(task_id)
+        if not task or not task.test_info:
+            return None
+            
+        # Remove test from failing tests list if present
+        if test_name in task.test_info.failing_tests:
+            task.test_info.failing_tests.remove(test_name)
+            
+        # Reset failure count for this test
+        if test_name in task.test_info.failure_counts:
+            del task.test_info.failure_counts[test_name]
+            
+        # Save the task
+        self._save_task(task)
+        
+        return task
+        
+    def add_attempted_solution(self, task_id: str, test_name: str, solution: str, success: bool = False):
+        """Record an attempted solution for a test
+        
+        Args:
+            task_id: The ID of the task
+            test_name: The name of the test
+            solution: Description of the attempted solution
+            success: Whether the solution was successful
+            
+        Returns:
+            The updated task or None if the task doesn't exist
+        """
+        task = self.get_task(task_id)
+        if not task:
+            return None
+            
+        # Initialize test_info if not already done
+        if not task.test_info:
+            task.test_info = TestInfo()
+            
+        # Add to attempted solutions
+        task.test_info.attempted_solutions.append(f"{test_name}: {solution} ({'success' if success else 'failed'})")
+        
+        # Save the task
+        self._save_task(task)
+        
+        return task
 
 
 def get_task_manager(storage_dir: Optional[str] = None) -> TaskManager:

@@ -1175,13 +1175,14 @@ class Commands:
         active_task = task_manager.get_active_task()
         
         if active_task and active_task.test_info:
-            # Reset failure counts for this test
-            task_manager.reset_test_failures(active_task.id)
-            self.io.tool_output("Test passed! Reset failure tracking.")
-            
-            # Add successful solution to task history
+            # Reset failure counts for all failing tests
             if active_task.test_info.failing_tests:
-                for test_name in active_task.test_info.failing_tests:
+                for test_name in list(active_task.test_info.failing_tests):
+                    task_manager.reset_test_failures(active_task.id, test_name)
+                self.io.tool_output("Test passed! Reset failure tracking.")
+                
+                # Add successful solution to task history
+                for test_name in list(active_task.test_info.failing_tests):
                     task_manager.add_attempted_solution(
                         active_task.id, 
                         test_name, 
