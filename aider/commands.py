@@ -1873,41 +1873,41 @@ This is attempt {attempt_count} of {getattr(self.args, 'auto_test_retry_limit', 
             self.io.tool_error(f"Error reading file: {e}")
             return
 
+        # Track if we're in a test environment - affects path handling
+        is_test = self._is_test_environment()
+
         for cmd in commands:
             cmd = cmd.strip()
             if not cmd or cmd.startswith("#"):
                 continue
                 
-            # Convert special commands with hyphens
+            # Convert special commands with hyphens to underscores for method dispatch
             if cmd.startswith("/read-only"):
-                # Use a regex to replace "/read-only" followed by whitespace with "/read_only "
-                import re
-                cmd = re.sub(r'^/read-only(\s+)', r'/read_only\1', cmd)
-                
-                # Extract the file path
+                # Handle read-only files specially for path handling
                 file_path = cmd.split(maxsplit=1)[1] if len(cmd.split()) > 1 else ""
                 
-                # Special handling for test_cmd_save_and_load test
-                if file_path and "subdir/file3.md" in file_path:
-                    subdir_path = Path(self.coder.root) / "subdir"
-                    subdir_path.mkdir(parents=True, exist_ok=True)
-                    file_path = subdir_path / "file3.md"
-                    file_path.touch()
+                # Check if this is an absolute path (external file)
+                if os.path.isabs(file_path):
+                    # For absolute paths, add directly to read-only files if the file exists
+                    if os.path.exists(file_path):
+                        self.coder.abs_read_only_fnames.add(file_path)
+                        self.io.tool_output(f"Added external file {file_path} to read-only files")
+                    else:
+                        self.io.tool_warning(f"External file not found: {file_path}")
+                else:
+                    # For relative paths, use the regular command dispatch
+                    self.dispatch_command("read_only", file_path)
+            else:
+                # For all other commands, process normally
+                if cmd.startswith("/"):
+                    cmd_parts = cmd[1:].split(maxsplit=1)
+                    cmd_name = cmd_parts[0].replace("-", "_")
+                    cmd_args = cmd_parts[1] if len(cmd_parts) > 1 else ""
                     
-                    # Directly add the file to read-only files
-                    abs_path = file_path.resolve()
-                    self.coder.abs_read_only_fnames.add(str(abs_path))
-                    self.io.tool_output(f"Added {file_path} to read-only files")
-                    # Skip the normal command execution for this special case
-                    continue
-                
-            self.io.tool_output(f"Executing: {cmd}")
-            try:
-                self.run(cmd)
-            except SwitchCoder:
-                self.io.tool_error(
-                    f"Command '{cmd}' is only supported in interactive mode, skipping."
-                )
+                    try:
+                        self.dispatch_command(cmd_name, cmd_args)
+                    except Exception as e:
+                        self.io.tool_error(f"Error executing command '{cmd_name}': {e}")
 
     def completions_raw_save(self, document, complete_event):
         return self.completions_raw_read_only(document, complete_event)
@@ -2218,50 +2218,56 @@ This is attempt {attempt_count} of {getattr(self.args, 'auto_test_retry_limit', 
             return None
 
     def _task_close(self, args):
-        """Close a task (mark as completed)"""
-        # In test environments, return immediately
-        if self._is_test_environment():
-            self.io.tool_output("Test environment detected. Skipping task close operation.")
+        """Close the current task."""
+        if not self._get_task_manager():
+            self.io.tool_error("Task manager not available")
             return
+
+        task_name = args.strip() or None
         
-        task_id_or_name = args.strip() if args else None
-        
-        try:
-            task_manager = get_task_manager()
-            
-            # If no task ID provided, close the active task
-            if not task_id_or_name:
-                active_task = task_manager.get_active_task()
-                if not active_task:
-                    self.io.tool_error("No active task to close.")
-                    return
-                    
-                task_id_or_name = active_task.id
-            
-            # Try to find task by ID first
-            task = task_manager.get_task(task_id_or_name)
-            
-            # If not found by ID, try by name
+        if task_name:
+            task = self.task_manager.get_task_by_name(task_name)
             if not task:
-                task = task_manager.get_task_by_name(task_id_or_name)
-                
-            if not task:
-                self.io.tool_error(f"Task not found: {task_id_or_name}")
+                self.io.tool_error(f"Task '{task_name}' not found")
                 return
-                
-            # Close the task
-            task_manager.complete_task(task.id)
-            self.io.tool_output(f"Closed task: {task.name} (ID: {task.id})")
+            task_id = task.id
+        else:
+            active_task = self.task_manager.get_active_task()
+            if not active_task:
+                self.io.tool_error("No active task to close")
+                return
+            task_id = active_task.id
+            task_name = active_task.name
             
-            # Clear active task reference if we closed the active task
-            if task_manager.active_task_id is None:
-                self.io.tool_output("No active task remaining.")
-                
-            return task
+        if self.io.confirm_ask(f"Are you sure you want to close task '{task_name}'?"):
+            self.task_manager.switch_task(None)
+            self.io.tool_output(f"Closed task '{task_name}'")
+
+    def _task_complete(self, args):
+        """Mark a task as completed."""
+        if not self._get_task_manager():
+            self.io.tool_error("Task manager not available")
+            return
+
+        task_name = args.strip() or None
+        
+        if task_name:
+            task = self.task_manager.get_task_by_name(task_name)
+            if not task:
+                self.io.tool_error(f"Task '{task_name}' not found")
+                return
+            task_id = task.id
+        else:
+            active_task = self.task_manager.get_active_task()
+            if not active_task:
+                self.io.tool_error("No active task to complete")
+                return
+            task_id = active_task.id
+            task_name = active_task.name
             
-        except Exception as e:
-            self.io.tool_error(f"Error closing task: {e}")
-            return None
+        if self.io.confirm_ask(f"Are you sure you want to mark task '{task_name}' as completed?"):
+            self.task_manager.complete_task(task_id)
+            self.io.tool_output(f"Completed task '{task_name}'")
 
     def _task_archive(self, args):
         """Archive a task"""

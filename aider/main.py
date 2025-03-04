@@ -767,7 +767,7 @@ def main(argv=None, input=None, output=None, force_git_root=None, return_coder=F
     if not args.model:
         # Select model based on available API keys
         model_key_pairs = [
-            ("ANTHROPIC_API_KEY", "sonnet"),
+            ("ANTHROPIC_API_KEY", "claude-3-sonnet"),
             ("DEEPSEEK_API_KEY", "deepseek"),
             ("OPENROUTER_API_KEY", "openrouter/anthropic/claude-3.7-sonnet"),
             ("OPENAI_API_KEY", "gpt-4o"),
