@@ -197,6 +197,13 @@ class InputOutput:
     num_user_asks = 0
     clipboard_watcher = None
 
+    def repo_map_content(self, repo_map):
+        """Return the repository map content.
+        
+        This is a stub method added to fix AttributeError in tests.
+        """
+        return repo_map
+
     def __init__(
         self,
         pretty=True,

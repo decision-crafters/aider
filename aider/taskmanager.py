@@ -33,8 +33,8 @@ class Task:
     id: str
     name: str
     description: str
-    created_at: str
-    updated_at: str
+    created_at: str = field(default_factory=lambda: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+    updated_at: str = field(default_factory=lambda: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
     status: str = "active"  # active, completed, archived
     parent_id: Optional[str] = None
     files: List[str] = field(default_factory=list)
