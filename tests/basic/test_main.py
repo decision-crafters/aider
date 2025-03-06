@@ -738,6 +738,83 @@ class TestMain(TestCase):
             result = main(["--api-key", "INVALID_FORMAT", "--exit", "--yes"])
             self.assertEqual(result, 1)
 
+    def test_git_config_include(self):
+        # Test that aider respects git config includes for user.name and user.email
+        with GitTemporaryDirectory() as git_dir:
+            git_dir = Path(git_dir)
+
+            # Create an includable config file with user settings
+            include_config = git_dir / "included.gitconfig"
+            include_config.write_text(
+                "[user]\n    name = Included User\n    email = included@example.com\n"
+            )
+
+            # Set up main git config to include the other file
+            repo = git.Repo(git_dir)
+            include_path = str(include_config).replace("\\", "/")
+            repo.git.config("--local", "include.path", str(include_path))
+
+            # Verify the config is set up correctly using git command
+            self.assertEqual(repo.git.config("user.name"), "Included User")
+            self.assertEqual(repo.git.config("user.email"), "included@example.com")
+
+            # Manually check the git config file to confirm include directive
+            git_config_path = git_dir / ".git" / "config"
+            git_config_content = git_config_path.read_text()
+
+            # Run aider and verify it doesn't change the git config
+            main(["--yes", "--exit"], input=DummyInput(), output=DummyOutput())
+
+            # Check that the user settings are still the same using git command
+            repo = git.Repo(git_dir)  # Re-open repo to ensure we get fresh config
+            self.assertEqual(repo.git.config("user.name"), "Included User")
+            self.assertEqual(repo.git.config("user.email"), "included@example.com")
+
+            # Manually check the git config file again to ensure it wasn't modified
+            git_config_content_after = git_config_path.read_text()
+            self.assertEqual(git_config_content, git_config_content_after)
+
+    def test_git_config_include_directive(self):
+        # Test that aider respects the include directive in git config
+        with GitTemporaryDirectory() as git_dir:
+            git_dir = Path(git_dir)
+
+            # Create an includable config file with user settings
+            include_config = git_dir / "included.gitconfig"
+            include_config.write_text(
+                "[user]\n    name = Directive User\n    email = directive@example.com\n"
+            )
+
+            # Set up main git config with include directive
+            git_config = git_dir / ".git" / "config"
+            # Use normalized path with forward slashes for git config
+            include_path = str(include_config).replace("\\", "/")
+            with open(git_config, "a") as f:
+                f.write(f"\n[include]\n    path = {include_path}\n")
+
+            # Read the modified config file
+            modified_config_content = git_config.read_text()
+
+            # Verify the include directive was added correctly
+            self.assertIn("[include]", modified_config_content)
+
+            # Verify the config is set up correctly using git command
+            repo = git.Repo(git_dir)
+            self.assertEqual(repo.git.config("user.name"), "Directive User")
+            self.assertEqual(repo.git.config("user.email"), "directive@example.com")
+
+            # Run aider and verify it doesn't change the git config
+            main(["--yes", "--exit"], input=DummyInput(), output=DummyOutput())
+
+            # Check that the git config file wasn't modified
+            config_after_aider = git_config.read_text()
+            self.assertEqual(modified_config_content, config_after_aider)
+
+            # Check that the user settings are still the same using git command
+            repo = git.Repo(git_dir)  # Re-open repo to ensure we get fresh config
+            self.assertEqual(repo.git.config("user.name"), "Directive User")
+            self.assertEqual(repo.git.config("user.email"), "directive@example.com")
+
     def test_invalid_edit_format(self):
         with GitTemporaryDirectory():
             with patch("aider.io.InputOutput.offer_url") as mock_offer_url:

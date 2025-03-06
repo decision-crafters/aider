@@ -636,6 +636,16 @@ cog.out("```\n")
   use_repo_map: true
   reminder: sys
 
+- name: gpt-4.5-preview
+  edit_format: diff
+  weak_model_name: gpt-4o-mini
+  use_repo_map: true
+  lazy: true
+  reminder: sys
+  examples_as_sys_msg: true
+  editor_model_name: gpt-4o
+  editor_edit_format: editor-diff
+
 - name: gpt-4o
   edit_format: diff
   weak_model_name: gpt-4o-mini
@@ -706,6 +716,16 @@ cog.out("```\n")
   editor_model_name: gpt-4o
   editor_edit_format: editor-diff
   system_prompt_prefix: 'Formatting re-enabled. '
+
+- name: openai/gpt-4.5-preview
+  edit_format: diff
+  weak_model_name: gpt-4o-mini
+  use_repo_map: true
+  lazy: true
+  reminder: sys
+  examples_as_sys_msg: true
+  editor_model_name: openai/gpt-4o
+  editor_edit_format: editor-diff
 
 - name: openai/gpt-4o
   edit_format: diff
@@ -831,6 +851,19 @@ cog.out("```\n")
   use_repo_map: true
   reminder: sys
   examples_as_sys_msg: true
+  editor_edit_format: editor-diff
+
+- name: openrouter/deepseek/deepseek-chat:free
+  edit_format: diff
+  weak_model_name: openrouter/deepseek/deepseek-chat:free
+  use_repo_map: true
+  examples_as_sys_msg: true
+  extra_params:
+    max_tokens: 8192
+  caches_by_default: true
+  use_temperature: false
+  editor_model_name: openrouter/deepseek/deepseek-chat:free
+  editor_edit_format: editor-diff
 
 - name: openrouter/deepseek/deepseek-coder
   edit_format: diff
