@@ -832,6 +832,24 @@ def get_parser(default_config_files, git_root):
         help="Enable/disable multi-line input mode with Meta-Enter to submit (default: False)",
     )
     group.add_argument(
+        "--notifications",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Enable/disable terminal bell notifications when LLM responses are ready (default:"
+            " False)"
+        ),
+    )
+    group.add_argument(
+        "--notifications-command",
+        metavar="COMMAND",
+        default=None,
+        help=(
+            "Specify a command to run for notifications instead of the terminal bell. If not"
+            " specified, a default command for your OS may be used."
+        ),
+    )
+    group.add_argument(
         "--detect-urls",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -840,12 +858,6 @@ def get_parser(default_config_files, git_root):
     group.add_argument(
         "--editor",
         help="Specify which editor to use for the /editor command",
-    )
-    group.add_argument(
-        "--install-tree-sitter-language-pack",
-        action="store_true",
-        help="Install the tree_sitter_language_pack (experimental)",
-        default=False,
     )
 
     ##########

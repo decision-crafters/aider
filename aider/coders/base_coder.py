@@ -1395,6 +1395,9 @@ Note: This task should satisfy these requirements from the project system card:
     def send_message(self, inp):
         self.event("message_send_starting")
 
+        # Notify IO that LLM processing is starting
+        self.io.llm_started()
+
         self.cur_messages += [
             dict(role="user", content=inp),
         ]
@@ -1832,6 +1835,8 @@ Note: This task should satisfy these requirements from the project system card:
             raise FinishReasonLength()
 
     def show_send_output_stream(self, completion):
+        received_content = False
+
         for chunk in completion:
             if len(chunk.choices) == 0:
                 continue
@@ -1850,6 +1855,7 @@ Note: This task should satisfy these requirements from the project system card:
                         self.partial_response_function_call[k] += v
                     else:
                         self.partial_response_function_call[k] = v
+                received_content = True
             except AttributeError:
                 pass
 
@@ -1857,6 +1863,7 @@ Note: This task should satisfy these requirements from the project system card:
                 text = chunk.choices[0].delta.content
                 if text:
                     self.partial_response_content += text
+                    received_content = True
             except AttributeError:
                 text = None
 
@@ -1873,6 +1880,9 @@ Note: This task should satisfy these requirements from the project system card:
                     sys.stdout.write(safe_text)
                 sys.stdout.flush()
                 yield text
+
+        if not received_content:
+            self.io.tool_warning("Empty response received from LLM. Check your provider account?")
 
     def live_incremental_response(self, final):
         show_resp = self.render_incremental_response(final)
